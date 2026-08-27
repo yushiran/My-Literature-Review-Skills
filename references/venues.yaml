@@ -1,0 +1,83 @@
+# Venue tiers used by rank.py. Matching is case-insensitive substring on the
+# venue name reported by OpenAlex / Semantic Scholar / arXiv, so "NeurIPS"
+# matches "Advances in Neural Information Processing Systems" via the alias.
+# Edit freely; unknown venues get tier 3, preprints tier 4 unless they carry a
+# known conference name in the comment/journal-ref field.
+#
+# weight is the multiplier rank.py applies. Tier 1 = the venues this user
+# treats as "must be aware of"; tier 2 = strong; tier 3 = ordinary; tier 4 =
+# preprint / unknown.
+
+tiers:
+  1:
+    weight: 1.0
+    venues:
+      - NeurIPS
+      - Advances in Neural Information Processing Systems
+      - ICML
+      - International Conference on Machine Learning
+      - ICLR
+      - International Conference on Learning Representations
+      - CVPR
+      - Computer Vision and Pattern Recognition
+      - ICCV
+      - International Conference on Computer Vision
+      - ECCV
+      - European Conference on Computer Vision
+      - Nature
+      - Science
+      - Nature Machine Intelligence
+      - Nature Methods
+      - Nature Biomedical Engineering
+      - Nature Communications
+      - IEEE Transactions on Pattern Analysis and Machine Intelligence
+      - TPAMI
+      - IEEE Transactions on Medical Imaging
+      - TMI
+      - Medical Image Analysis
+      - Magnetic Resonance in Medicine
+      - MICCAI
+      - Medical Image Computing and Computer Assisted Intervention
+      - Journal of Machine Learning Research
+      - JMLR
+      - SIAM Journal on Imaging Sciences
+  2:
+    weight: 0.8
+    venues:
+      - AAAI
+      - IJCAI
+      - ACL
+      - EMNLP
+      - NAACL
+      - KDD
+      - WACV
+      - BMVC
+      - IEEE Transactions on Image Processing
+      - TIP
+      - IEEE Transactions on Signal Processing
+      - IEEE Transactions on Computational Imaging
+      - IEEE Journal of Selected Topics in Signal Processing
+      - NeuroImage
+      - Radiology
+      - Journal of Magnetic Resonance Imaging
+      - IPMI
+      - Information Processing in Medical Imaging
+      - ISBI
+      - ISMRM
+      - International Society for Magnetic Resonance in Medicine
+      - MIDL
+      - Inverse Problems
+      - Proceedings of the IEEE
+      - Physics in Medicine and Biology
+      - Scientific Reports
+      - PLOS
+  3:
+    weight: 0.6
+    venues: []          # everything else with a named journal/conference
+  4:
+    weight: 0.5
+    venues:
+      - arXiv
+      - bioRxiv
+      - medRxiv
+      - SSRN
