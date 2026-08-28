@@ -296,6 +296,8 @@ def main() -> int:
             elif p["status"] == "no-pdf":
                 p["error"] = r["error"]  # URL attempt failed; keep no-pdf, not failed
                 M.log(f"convert: {r['id']}: still no-pdf ({r['error']})")
+                M.save(args, fresh)
+                return  # not counted as failed
             else:
                 p["status"], p["error"] = "failed", r["error"]
                 M.log(f"convert: {r['id']}: failed ({r['error']})")
