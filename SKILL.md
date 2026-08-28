@@ -73,9 +73,17 @@ uv run scripts/pipeline.py --topic <slug> --jobs 4
 
 Run it in the background (`run_in_background`) and keep going. It downloads
 the open-access PDFs (paywalled ones become `no-pdf` and keep their abstract in
-the index), converts each PDF with `mineru-open-api extract` in four parallel
+the index), converts each paper with `mineru-open-api extract` in four parallel
 processes, and rebuilds `INDEX.md`. Re-running is safe; it only touches papers
 whose state moved.
+
+Conversion is by URL whenever possible: a paper with an arXiv id or an
+open-access `pdf_url` is passed to the CLI as that URL, so the MinerU server
+fetches it itself and nothing is uploaded from this machine (uploads to the
+MinerU OSS bucket time out from many HPC and campus networks, even for a 2 MB
+file). The local `pdf/<id>.pdf` is uploaded only as a fallback, or always with
+`convert.py --upload`. If `failed` entries show `upload: ... Client.Timeout`,
+that is the network, not the token; re-run `convert.py --retry-failed`.
 
 A PDF the user drops into `pdf/<id>.pdf` by hand is picked up on the next run.
 

@@ -80,8 +80,8 @@ found ──rank──▶ (score set) ──scout+select──▶ selected ─�
 - `no-pdf`: no open-access link, or download refused (paywall, 403). Kept in
   the index with its abstract.
 - `md`: `md/<id>/<id>.md` exists.
-- `failed`: convert failed; `error` holds the last line of stderr. Re-run
-  convert.py to retry.
+- `failed`: convert failed; `error` holds the last line of stderr per source
+  tried (`url: …` / `upload: …`). Re-run `convert.py --retry-failed` to retry.
 
 ## Scripts
 
@@ -94,7 +94,7 @@ script takes `--topic <slug>` and `--root <dir>` (default `./references`).
 | `rank.py [--top 100]` | manifest → `score`, `candidates.md` | score = tier_weight × recency × (0.35 + 0.35 × cites + 0.30 × rel), where cites is log1p(citations_per_year) and rel is `relevance` (0.5 if null), each normalised to [0,1] by its own max over the manifest before combining, and a venue whose string contains "workshop" is forced to tier 3. Venue matching: an all-caps name (AAAI, TMI) matches as a whole word, a one-word name (Nature, Science) must equal the venue, a multi-word name matches as a substring, and the longest match wins across tiers; recency = 1.0 for the last two years, 0.7 for the two before, 0.4 older. candidates.md lists the top N with id, title, venue, year, citations, abstract — the only thing the scout reads. |
 | `select.py --file selected.json` | selected.json → `selected`/`rejected` | selected.json = `[{"id": "...", "why": "..."}]`; everything else in candidates becomes `rejected`. |
 | `fetch.py [--jobs 4]` | `selected` → `pdf` / `no-pdf` | Tries pdf_url, then arXiv `/pdf/<id>`, then Unpaywall-style OpenAlex `best_oa_location`. Browser UA, 3 retries, skips on 403/402/HTML body. Already-present `pdf/<id>.pdf` → `pdf` without download. |
-| `convert.py [--jobs 4] [--model vlm]` | `pdf` → `md` / `failed` | Runs `mineru-open-api extract <pdf> -o md/<id>/ -f md --language en` as N parallel subprocesses (the CLI's own --concurrency is reserved/unimplemented). Exit 3 with a clear message if no token is configured — see SKILL.md. Never falls back to flash-extract on its own. |
+| `convert.py [--jobs 4] [--model vlm] [--upload] [--retry-failed]` | `pdf` (+ `no-pdf` with a URL) → `md` / `failed` | Runs `mineru-open-api extract <source> -o md/<id>/ -f md --language en` as N parallel subprocesses (the CLI's own --concurrency is reserved/unimplemented). `<source>` is tried in order: `https://arxiv.org/pdf/<arxiv>`, then `pdf_url`, then the local `pdf/<id>.pdf` — the URL forms make the MinerU server fetch the paper itself, so nothing is uploaded from this machine (uploads to the MinerU OSS bucket time out from many HPC / campus networks). `--upload` skips the URL attempts. A `no-pdf` paper with a URL is attempted too and stays `no-pdf` if it fails. Exit 3 with a clear message if no token is configured — see SKILL.md. Never falls back to flash-extract on its own. |
 | `index.py [--guide guide.md] [--dump-abstracts]` | manifest (+ guide.md) → `INDEX.md` | Table sorted by year desc then tier then citations; one `###` block per paper with status, files, abstract. If guide.md exists it is inserted verbatim between `<!-- guide -->` markers at the top. `--dump-abstracts` prints id/title/venue/year/abstract for the librarian and exits. |
 | `pipeline.py [--jobs 4]` | runs fetch → convert → index once | The main agent runs this in the background after each selection batch. |
 

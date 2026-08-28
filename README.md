@@ -28,7 +28,9 @@ claude plugin install literature-review@yushiran-research
 
 `mineru-document-extractor` is installed as a dependency. MinerU's CLI is
 `npm install -g mineru-open-api`; conversion with figures needs a token from
-https://mineru.net/apiManage/token (`mineru-open-api auth`). Semantic Scholar
+https://mineru.net/apiManage/token (`mineru-open-api auth`). Papers with an
+arXiv id or an open-access link are converted by URL, fetched by the MinerU
+server itself; the local PDF is uploaded only when no URL exists. Semantic Scholar
 works without a key but is rate-limited; a free key from
 https://www.semanticscholar.org/product/api#api-key-form goes in `S2_API_KEY`.
 

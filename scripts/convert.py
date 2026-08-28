@@ -5,11 +5,16 @@
 """Convert every `pdf` paper to Markdown with `mineru-open-api extract`.
 
 One CLI subprocess per paper, N in parallel (the CLI's own --concurrency is
-reserved and does nothing). Output lands in md/<id>/<id>.md with its images/
-directory beside it. Success -> `md`; failure or timeout -> `failed` with the
-last stderr line in `error`. The token gate runs before any paper is touched
-and a rejected token stops the run with exit 3. Never falls back to
-flash-extract. Contract: references/workflow.md.
+reserved and does nothing). A paper with an arXiv id or an open-access
+`pdf_url` is handed to the CLI as a URL, so the MinerU server fetches it
+itself and nothing is uploaded from this machine (uploads to the MinerU OSS
+bucket time out from many HPC / campus networks). The local pdf/<id>.pdf is
+uploaded only when no URL exists or the URL attempt failed; `--upload` forces
+the local file. Output lands in md/<id>/<id>.md with its images/ directory
+beside it. Success -> `md`; failure or timeout -> `failed` with the last
+stderr line in `error`. The token gate runs before any paper is touched and a
+rejected token stops the run with exit 3. Never falls back to flash-extract.
+Contract: references/workflow.md.
 """
 import concurrent.futures as cf
 import os
@@ -147,23 +152,35 @@ def finalize(out_dir: Path, pid: str):
 
 # ---------------------------------------------------------------- one paper
 
-def convert_one(pid: str, pdf_path: Path, out_dir: Path, args, abort: threading.Event) -> dict:
+def sources_of(p: dict, pdf_path: Path, upload_only: bool) -> list:
+    """Ordered (mode, source) attempts: arXiv URL, then pdf_url, then the local file."""
+    out = []
+    if not upload_only:
+        if p.get("arxiv"):
+            out.append(("url", f"https://arxiv.org/pdf/{p['arxiv']}"))
+        url = p.get("pdf_url") or ""
+        if url.startswith(("http://", "https://")):
+            out.append(("url", url))
+    if pdf_path.is_file():
+        out.append(("upload", str(pdf_path.resolve())))
+    return out
+
+
+def convert_one(pid: str, mode: str, source: str, out_dir: Path, args, abort: threading.Event) -> dict:
+    """One CLI run; `source` is a URL the MinerU server fetches or a local pdf path it uploads."""
     res = {"id": pid, "status": "failed", "error": "", "stderr": ""}
     if abort.is_set():
         res["error"] = "not attempted: run aborted"
         res["status"] = "skipped"
         return res
-    if not pdf_path.is_file():
-        res["error"] = f"pdf not found on disk: {pdf_path.name}"
-        return res
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
-        CLI, "extract", str(pdf_path.resolve()), "-o", str(out_dir.resolve()) + os.sep,
+        CLI, "extract", source, "-o", str(out_dir.resolve()) + os.sep,
         "-f", "md", "--language", args.language, "--timeout", str(int(args.timeout)),
     ]
     if args.model != "auto":
         cmd += ["--model", args.model]
-    M.log(f"convert: {pid}: start")
+    M.log(f"convert: {pid}: start ({mode}: {source if mode == 'url' else Path(source).name})")
     try:
         r = subprocess.run(
             cmd, capture_output=True, text=True, timeout=args.timeout, stdin=subprocess.DEVNULL,
@@ -205,6 +222,8 @@ def main() -> int:
     parser.add_argument("--language", default="en", help="document language (default en)")
     parser.add_argument("--timeout", type=float, default=900, help="per-file timeout in seconds (default 900)")
     parser.add_argument("--retry-failed", action="store_true", help="also re-run papers in state failed")
+    parser.add_argument("--upload", action="store_true",
+                        help="always upload the local pdf; skip the arXiv / pdf_url URL attempts")
     args = parser.parse_args()
     if args.jobs < 1:
         M.log("convert: --jobs must be >= 1")
@@ -229,14 +248,17 @@ def main() -> int:
         p["pdf"] = rel
         return tdir / rel
 
-    # Already-converted papers are accepted without a run.
+    # Already-converted papers are accepted without a run. A `no-pdf` paper is
+    # attempted too when it has a URL the MinerU server can fetch itself.
     n_skip, todo = 0, []
-    for p in M.papers_in(manifest, *states):
+    for p in M.papers_in(manifest, *states, "no-pdf"):
         md = md_path(p)
         if md.is_file() and md.stat().st_size > MIN_MD_BYTES:
             p["status"], p["error"] = "md", ""
             n_skip += 1
             M.log(f"convert: {p['id']}: already converted")
+        elif p["status"] == "no-pdf" and (args.upload or not sources_of(p, pdf_path(p), False)):
+            continue  # nothing the server could fetch; stays no-pdf with its abstract
         else:
             todo.append(p)
     if n_skip:
@@ -271,6 +293,9 @@ def main() -> int:
             if r["status"] == "md":
                 p["status"], p["error"] = "md", ""
                 M.log(f"convert: {r['id']}: md")
+            elif p["status"] == "no-pdf":
+                p["error"] = r["error"]  # URL attempt failed; keep no-pdf, not failed
+                M.log(f"convert: {r['id']}: still no-pdf ({r['error']})")
             else:
                 p["status"], p["error"] = "failed", r["error"]
                 M.log(f"convert: {r['id']}: failed ({r['error']})")
@@ -278,7 +303,20 @@ def main() -> int:
             M.save(args, fresh)
 
     def work(p):
-        r = convert_one(p["id"], pdf_path(p), tdir / "md" / p["id"], args, abort)
+        # Try each source in order; stop at the first md (or a token rejection / abort).
+        attempts = sources_of(p, pdf_path(p), args.upload)
+        if not attempts:
+            r = {"id": p["id"], "status": "failed", "error": f"pdf not found on disk: {p['id']}.pdf", "stderr": ""}
+            record(r)
+            return r
+        errors = []
+        for mode, source in attempts:
+            r = convert_one(p["id"], mode, source, tdir / "md" / p["id"], args, abort)
+            if r["status"] in ("md", "token", "skipped"):
+                break
+            errors.append(f"{mode}: {r['error']}")
+        if r["status"] == "failed":
+            r["error"] = " | ".join(errors)[:MAX_ERROR]
         record(r)
         return r
 
