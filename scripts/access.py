@@ -44,6 +44,7 @@ import json
 import os
 import re
 import stat
+import time
 import urllib.parse
 import urllib.request
 
@@ -164,8 +165,18 @@ def ezproxy_host_rewrite(url, proxy_host):
     ))
 
 
+SESSION_TTL = 12 * 3600  # how long to pretend a session cookie lives
+
+
 def cookie_opener():
-    """An opener carrying the exported browser cookies, or None when unconfigured."""
+    """An opener carrying the exported browser cookies, or None when unconfigured.
+
+    A browser export gives a session cookie an expiry of 0. ignore_expires lets
+    MozillaCookieJar *load* it, but the policy then refuses to *send* it, because
+    0 is in the past. EZproxy keeps its whole session in such a cookie, so every
+    request would go out unauthenticated and land on the login page. Rewrite those
+    to a near-future expiry, which is what the browser effectively does.
+    """
     path = (os.environ.get("LITREV_COOKIES") or "").strip()
     if not path or not os.path.isfile(path):
         return None
@@ -174,6 +185,14 @@ def cookie_opener():
         jar.load(path, ignore_discard=True, ignore_expires=True)
     except (OSError, http.cookiejar.LoadError):
         return None
+    now = int(time.time())
+    n = 0
+    for c in jar:
+        if c.expires is None or c.expires <= now:
+            c.expires, c.discard, n = now + SESSION_TTL, False, n + 1
+    if n:
+        print(f"access: {n} session cookie(s) given a {SESSION_TTL // 3600}h expiry so they are sent",
+              flush=True)
     return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
 
