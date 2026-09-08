@@ -108,7 +108,12 @@ def raw_score(paper: dict, tiers: dict, current_year: int, max_cites: float, max
         rel = 0.5  # unknown, neutral
     else:
         rel = relevance / max_relevance if max_relevance > 0 else 0.0
-    return tier_w * recency(year, current_year) * (0.35 + 0.35 * cites + 0.30 * rel)
+    # Recency is a proxy for continuing relevance; citations per year measure it
+    # directly. A paper the field still cites heavily is not stale, so let its
+    # citation rate floor the age discount. Landmark papers older than the window
+    # keep their place; old and little-cited ones are unaffected.
+    age_factor = max(recency(year, current_year), cites)
+    return tier_w * age_factor * (0.35 + 0.35 * cites + 0.30 * rel)
 
 
 def write_candidates(path: Path, manifest: dict, ranked: list, topic_dir: Path) -> None:
