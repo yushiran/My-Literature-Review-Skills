@@ -20,6 +20,13 @@ import manifest as M  # noqa: E402
 
 DEFAULT_VENUES = Path(__file__).resolve().parent.parent / "references" / "venues.yaml"
 PREPRINT_MARKERS = ("arxiv", "biorxiv", "medrxiv", "ssrn")
+# One-page conference abstracts. A society's proceedings title often contains a
+# journal name -- ISMRM's contains "Magnetic Resonance in Medicine" -- so the
+# substring rule below would otherwise score them as that journal. Keep the
+# markers narrow: "annual meeting" alone would also catch ACL, whose full papers
+# are tier 1.
+ABSTRACT_MARKERS = ("scientific meeting", "proceedings on cd-rom",
+                    "book of abstracts", "abstract supplement", "meeting abstracts")
 CANDIDATE_STATES = ("found", "selected", "rejected")
 
 
@@ -48,9 +55,10 @@ def parse_venues(path: Path) -> dict:
 
 def venue_tier(venue: str, tiers: dict) -> int:
     """Lowest tier number whose venue list has a substring match; else 4 for preprints, 3 otherwise.
-    A workshop is not the main conference, so it is forced to tier 3 regardless of a match."""
+    A workshop is not the main conference, and an abstract volume is not its society's
+    journal, so both are forced to tier 3 regardless of a match."""
     v = (venue or "").lower().strip()
-    if "workshop" in v:
+    if "workshop" in v or any(m in v for m in ABSTRACT_MARKERS):
         return 3
     # acronyms (AAAI, TMI) match as a whole word; one-word names (Nature, Science) must equal
     # the venue; multi-word names match as substrings; the longest match wins across tiers
