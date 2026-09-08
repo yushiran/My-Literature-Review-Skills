@@ -138,6 +138,30 @@ def _iop(landing, doi):
     return f"https://iopscience.iop.org/article/{doi}/pdf" if doi else ""
 
 
+_DOI_PDF = {
+    "10.1002": lambda d: f"https://onlinelibrary.wiley.com/doi/pdfdirect/{d}",
+    "10.1007": lambda d: f"https://link.springer.com/content/pdf/{d}.pdf",
+    "10.1088": lambda d: f"https://iopscience.iop.org/article/{d}/pdf",
+    "10.1177": lambda d: f"https://journals.sagepub.com/doi/pdf/{d}",
+    "10.1080": lambda d: f"https://www.tandfonline.com/doi/pdf/{d}",
+    "10.1038": lambda d: f"https://www.nature.com/articles/{d.split('/', 1)[-1]}.pdf",
+    "10.1109": lambda d: (f"https://ieeexplore.ieee.org/stampPDF/getPDF.jsp?tp=&arnumber={d.rsplit('.', 1)[-1]}"
+                          if d.rsplit(".", 1)[-1].isdigit() and len(d.rsplit(".", 1)[-1]) >= 7 else ""),
+}
+
+
+def pdf_from_doi(doi):
+    """Publisher PDF derived from the DOI prefix alone, or ''.
+
+    IEEE embeds the article number as the last dot-segment of the DOI, which is
+    the only way to reach stampPDF without scraping the landing page.
+    """
+    if not doi or "/" not in doi:
+        return ""
+    fn = _DOI_PDF.get(doi.split("/", 1)[0])
+    return fn(doi) if fn else ""
+
+
 def pdf_from_landing(landing, doi):
     """Publisher PDF url derived from a landing page, or '' when the pattern is unknown."""
     host = (urllib.parse.urlparse(landing).hostname or "").lower()
@@ -217,7 +241,9 @@ def europepmc_pdf(doi, pmcid, fetch_json):
             return ""
         pmcid = rec.get("pmcid") or ""
         for link in ((rec.get("fullTextUrlList") or {}).get("fullTextUrl") or []):
-            if link.get("documentStyle") == "pdf" and link.get("url"):
+            # availabilityCode: OA = open access, S = subscription required, F = free.
+            if (link.get("documentStyle") == "pdf" and link.get("url")
+                    and link.get("availabilityCode") in ("OA", "F")):
                 return link["url"]
     if pmcid:
         return f"https://www.ebi.ac.uk/europepmc/webservices/rest/{pmcid}/fullTextPDF"
@@ -226,7 +252,7 @@ def europepmc_pdf(doi, pmcid, fetch_json):
 
 # ---------------------------------------------------------------- candidates
 
-def candidates(paper, landing_url="", pmcid="", fetch_json=None):
+def candidates(paper, landing_url="", pmcid="", fetch_json=None, known_urls=()):
     """Extra (via, url, headers) candidates for one paper, most-likely first.
 
     landing_url is the publisher page (OpenAlex primary_location.landing_page_url);
@@ -263,12 +289,18 @@ def candidates(paper, landing_url="", pmcid="", fetch_json=None):
 
     proxy = (os.environ.get("LITREV_EZPROXY_HOST") or "").strip()
     if proxy:
-        direct = pdf_from_landing(landing_url, doi) if landing_url else ""
-        if not direct and doi:
-            # No landing page: let the proxy resolve the DOI and hope for a PDF redirect.
-            direct = f"https://doi.org/{doi}"
-        if direct:
-            out.append(("ezproxy", ezproxy_host_rewrite(direct, proxy), {}))
+        # A direct publisher link that just answered 403 is exactly what the proxy
+        # is for, so the URLs already tried are candidates again once rewritten.
+        tries = [pdf_from_landing(landing_url, doi) if landing_url else "",
+                 pdf_from_doi(doi)]
+        tries += [u for u in known_urls if u and "doi.org" not in u]
+        tries.append(f"https://doi.org/{doi}" if doi else "")   # last resort: HTML landing page
+        seen = set()
+        for cand in tries:
+            if not cand or cand in seen:
+                continue
+            seen.add(cand)
+            out.append(("ezproxy", ezproxy_host_rewrite(cand, proxy), {}))
     return out
 
 

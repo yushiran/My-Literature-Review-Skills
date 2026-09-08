@@ -44,6 +44,10 @@ HOST_PAUSE = {"arxiv.org": 1.0}  # seconds to hold the slot after a request
 for _h in ("api.wiley.com", "api.elsevier.com", "www.ebi.ac.uk", "onlinelibrary.wiley.com",
            "ieeexplore.ieee.org", "www.sciencedirect.com", "link.springer.com"):
     HOST_LIMITS[_h], HOST_PAUSE[_h] = 1, 1.5
+# EZproxy answers 200 with its login page when the session cookie is gone, so the
+# only signal is the URL we ended up at.
+PROXY_LOGIN_RE = re.compile(r"^https?://login\.[^/]*\.oclc\.org/|/login\?(?:qurl|url)=", re.I)
+CREDENTIALED_VIA = ("ezproxy", "wiley-tdm", "elsevier-api")
 PREPLACE_STATES = ("selected", "pdf", "no-pdf", "failed")
 SAVE_EVERY = 5
 CHUNK = 1 << 20
@@ -58,6 +62,10 @@ class Refused(Exception):
 
 class Transient(Exception):
     """Failed after every retry; the server may answer later."""
+
+
+class SessionExpired(Refused):
+    """The institutional proxy bounced us to its login page: the cookie jar is stale."""
 
 
 # ---------------------------------------------------------------- http
@@ -169,6 +177,8 @@ def download(url, timeout, dest, headers=None):
     done = False
     try:
         with os.fdopen(fd, "wb") as out, open_url(url, timeout, headers) as r:
+            if PROXY_LOGIN_RE.search(r.geturl() or ""):
+                raise SessionExpired("proxy session expired, re-export the cookie jar")
             head = r.read(CHUNK)
             kind = body_kind(head)
             if kind:
@@ -254,7 +264,7 @@ def openalex_meta(doi, timeout, what):
 
 def fetch_one(pid, paper, dest, timeout):
     """Worker: try every candidate for one paper. Returns a result dict, never raises."""
-    reasons, n_refused, n_transient, tried = [], 0, 0, set()
+    reasons, n_refused, n_transient, tried, dead = [], 0, 0, set(), []
 
     def attempt(via, url, headers=None):
         nonlocal n_refused, n_transient
@@ -264,6 +274,9 @@ def fetch_one(pid, paper, dest, timeout):
         try:
             size = with_retries(lambda u, t: download(u, t, dest, headers), url, timeout, f"{pid} {via}")
             return {"id": pid, "status": "pdf", "via": via, "size": size, "error": ""}
+        except SessionExpired as e:
+            dead.append(via)
+            reasons.append(f"{via}: {e}")
         except Refused as e:
             n_refused += 1
             reasons.append(f"{via}: {e}")
@@ -293,7 +306,8 @@ def fetch_one(pid, paper, dest, timeout):
     # Europe PMC, publisher mining APIs, institutional proxy: only reached when the
     # paper has no open-access copy. Each is a no-op unless its credential is set.
     try:
-        extra = A.candidates(paper, landing, pmcid, lambda u: get_json(u, timeout, f"{pid} epmc"))
+        extra = A.candidates(paper, landing, pmcid, lambda u: get_json(u, timeout, f"{pid} epmc"),
+                             known_urls=(url, paper.get("pdf_url") or ""))
     except Exception as e:  # a broken route must never lose the paper
         extra, _ = [], reasons.append(f"access: {describe(e)}")
     for via, url, headers in extra:
@@ -310,6 +324,7 @@ def fetch_one(pid, paper, dest, timeout):
         "status": "no-pdf",
         "error": error,
         "transient": n_refused == 0 and n_transient > 0,
+        "session_expired": bool(dead),
     }
 
 
@@ -366,15 +381,21 @@ def main():
     M.log(f"fetch: extra routes for paywalled papers: {A.configured()}")
 
     papers = manifest["papers"]
-    n_pdf, n_nopdf, transient, completed = 0, 0, [], 0
+    n_pdf, n_nopdf, transient, completed, session_dead = 0, 0, [], 0, False
     pool = cf.ThreadPoolExecutor(max_workers=args.jobs)
     try:
         futures = [pool.submit(fetch_one, p["id"], p, pdf_path(p), args.timeout) for p in todo]
         for fut in cf.as_completed(futures):
             r = fut.result()
             p = papers[r["id"]]
+            if r.get("session_expired"):
+                # Leave the paper `selected`: it is our session that failed, not the paper.
+                session_dead = True
+                M.log(f"fetch: {r['id']}: institutional proxy session expired")
+                completed += 1
+                continue
             if r["status"] == "pdf":
-                p["status"], p["error"] = "pdf", ""
+                p["status"], p["error"], p["pdf_via"] = "pdf", "", r["via"]
                 n_pdf += 1
                 M.log(f"fetch: {r['id']}: pdf via {r['via']} ({r['size'] / 1e6:.1f} MB)")
             elif r["transient"]:
@@ -405,6 +426,11 @@ def main():
 
     remaining = len(M.papers_in(manifest, "selected"))
     print(f"pdf={n_pdf} no-pdf={n_nopdf} pre-placed={n_pre} remaining_selected={remaining}")
+    if session_dead:
+        M.log("fetch: the institutional proxy sent us to its login page. Re-export the cookie\n"
+              "       jar from a freshly signed-in browser tab, then re-run with --retry-no-pdf.\n"
+              f"       {remaining} paper(s) left selected; nothing was wrongly marked no-pdf.")
+        return M.EXIT_NETWORK
     if network_down:
         M.log(f"fetch: every download failed on the wire; {remaining} paper(s) left selected for a re-run")
         return M.EXIT_NETWORK

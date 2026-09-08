@@ -152,8 +152,19 @@ def finalize(out_dir: Path, pid: str):
 
 # ---------------------------------------------------------------- one paper
 
+CREDENTIALED_VIA = ("ezproxy", "wiley-tdm", "elsevier-api")
+
+
 def sources_of(p: dict, pdf_path: Path, upload_only: bool) -> list:
-    """Ordered (mode, source) attempts: arXiv URL, then pdf_url, then the local file."""
+    """Ordered (mode, source) attempts: arXiv URL, then pdf_url, then the local file.
+
+    A PDF that only came down through the institutional proxy or a mining API must
+    be uploaded. MinerU fetches a URL from its own servers, which hold none of our
+    credentials, so handing it the publisher link would convert a login or paywall
+    page into plausible-looking markdown and file it as the paper.
+    """
+    if p.get("pdf_via") in CREDENTIALED_VIA:
+        upload_only = True
     out = []
     if not upload_only:
         if p.get("arxiv"):
