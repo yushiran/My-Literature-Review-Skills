@@ -45,6 +45,46 @@ ELSEVIER_INSTTOKEN=...
 invocations, and refuses it if it is group- or world-readable. The agent must
 never read the file, echo a token, or pass one on a command line.
 
+## Getting the credentials
+
+Walk the user through these in this order; the ranking is by value per minute of
+their time, and each was tried for real.
+
+**Wiley text-and-data-mining token — do this one first.** It covers *Magnetic
+Resonance in Medicine*, which for an MRF or qMRI library is the single most
+valuable journal, and unlike a cookie it does not expire. The user signs in to
+Wiley Online Library with the institutional account and generates the token from
+the account page; the entry point is
+https://onlinelibrary.wiley.com/library-info/resources/text-and-datamining. If
+that page asks them to contact the library instead, the institution has not
+switched TDM rights on yet and one email saying "text and data mining token for a
+non-commercial research literature review" is normally enough. The token is a
+UUID. Verified 2026-09-08: with it, paywalled MRM articles download directly,
+2--6 MB each, via the `wiley-tdm` route and no proxy.
+
+**Elsevier — the key is instant and, off campus, not sufficient on its own.**
+Register at https://dev.elsevier.com/, "My API Key" then "Create API Key", which
+takes two minutes and asks only for a label. That gets metadata and open-access
+full text. Subscribed full text additionally needs *entitlement*, which comes
+either from the request originating inside the institution's IP range or from an
+**institutional token** that Elsevier support issues through the library.
+Verified 2026-09-08 from an off-campus compute node: the key alone returns 403 on
+*NeuroImage* and *Medical Image Analysis*, and the proxy cannot substitute,
+because the ScienceDirect PDF link carries a JavaScript-generated one-time token.
+So for Elsevier the sequence is: get the key now, then ask the library to request
+an `insttoken` for the API. Until it arrives those papers stay `no-pdf` with their
+abstract in the index, which is a perfectly usable state.
+
+**IEEE — nothing to apply for.** No mining API exists, so *TMI*, *ISBI* and
+*TBME* are reachable only through the proxy. This is why the cookie route is
+permanent infrastructure rather than a stopgap.
+
+**Europe PMC — nothing to apply for**, and it is already on.
+
+Do not tell the user a paper is unavailable until the routes their credentials
+actually enable have been tried. Before a batch, run one known-paywalled paper
+per publisher and report which routes answered.
+
 ## Finding the proxy host
 
 Ask the user to open any subscribed article from the library's own search page
