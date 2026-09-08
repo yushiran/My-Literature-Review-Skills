@@ -164,8 +164,25 @@ through the proxy or a mining API: MinerU holds none of our credentials, so it
 would fetch a login or paywall page and convert it into markdown that looks like
 a paper. `fetch.py` therefore records the route in `pdf_via`, and `convert.py`
 uploads the local file instead whenever that route was `ezproxy`, `wiley-tdm` or
-`elsevier-api`. Uploads are slower and time out on some campus networks; if they
-do, `convert.py --retry-failed` retries only those.
+`elsevier-api`.
+
+**And on some networks that upload simply does not work.** Measured on a UK HPC
+login node, 2026-09-08, across 217 selected papers: papers MinerU fetched by URL
+converted 16 out of 18, and papers requiring an upload converted 0 out of 6, with
+one success in about a dozen attempts overall. Every failure is the same, a `PUT`
+to the OSS bucket that never returns headers and gives up after 60 seconds. It is
+not a size limit and not the CLI's `--timeout`, which does not govern that request;
+plain `GET` and `PUT` to the same host answer in under a second, so it is neither
+bandwidth nor a block. Retrying is close to useless, and the papers that need the
+upload are exactly the paywalled journal papers the credentials were configured
+for, so the loss lands on the most valuable part of the library.
+
+Two recoveries, in order. Look for an arXiv version by title first, because that
+restores a full MinerU conversion with figures and tables; on the run above it
+found one paper in eight, which is worth the minute it costs. Then
+`convert.py --local-text-fallback` for the rest, which reads the pdf locally with
+pymupdf and writes a text-only markdown marked `conversion: "local-text"`. That
+loses the figures, but a paper we hold and cannot read is worse.
 
 ## Scale
 

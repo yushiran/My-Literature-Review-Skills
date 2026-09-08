@@ -122,6 +122,8 @@ def render_index(manifest: dict, papers: list, guide: str, tdir: Path) -> str:
         status = f"status: {p.get('status')}"
         if p.get("status") in ("failed", "no-pdf") and p.get("error"):
             status += f", error: {p['error']}"
+        if p.get("conversion") == "local-text":
+            status += ", text only (no figures or tables)"
         lines.append(status)
         lines.append("")
         lines.append(p.get("abstract") or "(no abstract)")

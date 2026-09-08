@@ -99,6 +99,13 @@ that is the network, not the token; re-run `convert.py --retry-failed`.
 
 A PDF the user drops into `pdf/<id>.pdf` by hand is picked up on the next run.
 
+A paper obtained through a credential must be uploaded, since MinerU cannot
+authenticate, and on some networks that upload never completes — see the
+conversion section of [references/institutional-access.md](references/institutional-access.md)
+for the measurements. When `failed` entries are all `upload:` errors, look for an
+arXiv version by title first, then run `convert.py --local-text-fallback` to read
+the rest locally as text.
+
 ### 4. Reading guide — librarian, one call
 
 When the pipeline reports nothing left to do:

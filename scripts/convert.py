@@ -154,6 +154,42 @@ def finalize(out_dir: Path, pid: str):
 
 CREDENTIALED_VIA = ("ezproxy", "wiley-tdm", "elsevier-api")
 
+# Last-resort local extraction. On networks where the upload to MinerU's bucket
+# does not complete, a paper we hold on disk would otherwise end `failed` with no
+# full text at all, which is worse than text without figures. Opt-in, and every
+# entry it writes says what it is so it is never mistaken for a MinerU conversion.
+LOCAL_TEXT_PROGRAM = """
+import sys, pymupdf
+src, dst = sys.argv[1], sys.argv[2]
+doc = pymupdf.open(src)
+head = ['<!-- Local text extraction (pymupdf), not a MinerU conversion.',
+        '     Every word of the text is here; figures, images, table structure',
+        '     and formula markup are not. -->', '']
+body = [page.get_text('text') for page in doc]
+if sum(len(b.strip()) for b in body) < 500:
+    sys.exit('no extractable text layer (scanned pdf?)')
+open(dst, 'w').write('\\n'.join(head + body))
+print(f'{len(doc)} pages')
+"""
+
+
+def local_text_md(pdf: Path, md: Path, timeout: float) -> str:
+    """Write a text-only md from a local pdf. Returns '' on success, else the reason."""
+    md.parent.mkdir(parents=True, exist_ok=True)
+    cmd = ["uv", "run", "--with", "pymupdf", "python", "-", str(pdf), str(md)]
+    try:
+        r = subprocess.run(cmd, input=LOCAL_TEXT_PROGRAM, capture_output=True,
+                           text=True, timeout=timeout)
+    except FileNotFoundError:
+        return "local text: uv not on PATH"
+    except subprocess.TimeoutExpired:
+        return "local text: timed out"
+    if r.returncode != 0:
+        return "local text: " + (last_line(r.stderr) or f"exit {r.returncode}")
+    if not md.is_file() or md.stat().st_size < MIN_MD_BYTES:
+        return "local text: produced nothing usable"
+    return ""
+
 
 def sources_of(p: dict, pdf_path: Path, upload_only: bool) -> list:
     """Ordered (mode, source) attempts: arXiv URL, then pdf_url, then the local file.
@@ -233,6 +269,10 @@ def main() -> int:
     parser.add_argument("--language", default="en", help="document language (default en)")
     parser.add_argument("--timeout", type=float, default=900, help="per-file timeout in seconds (default 900)")
     parser.add_argument("--retry-failed", action="store_true", help="also re-run papers in state failed")
+    parser.add_argument("--local-text-fallback", action="store_true",
+                        help="when MinerU cannot fetch or accept a paper, extract its text locally "
+                             "with pymupdf; keeps every word, loses figures and tables, and the entry "
+                             "is marked conversion=local-text")
     parser.add_argument("--upload", action="store_true",
                         help="always upload the local pdf; skip the arXiv / pdf_url URL attempts")
     args = parser.parse_args()
@@ -303,7 +343,12 @@ def main() -> int:
             p["md"] = f"md/{r['id']}/{r['id']}.md"
             if r["status"] == "md":
                 p["status"], p["error"] = "md", ""
-                M.log(f"convert: {r['id']}: md")
+                if r.get("local_text"):
+                    p["conversion"] = "local-text"   # no figures/tables; see local_text_md
+                    M.log(f"convert: {r['id']}: md (local text only)")
+                else:
+                    p.pop("conversion", None)
+                    M.log(f"convert: {r['id']}: md")
             elif p["status"] == "no-pdf":
                 p["error"] = r["error"]  # URL attempt failed; keep no-pdf, not failed
                 M.log(f"convert: {r['id']}: still no-pdf ({r['error']})")
@@ -330,6 +375,15 @@ def main() -> int:
             errors.append(f"{mode}: {r['error']}")
         if r["status"] == "failed":
             r["error"] = " | ".join(errors)[:MAX_ERROR]
+            # MinerU could neither fetch it nor accept the upload; read it locally.
+            pdf = pdf_path(p)
+            if args.local_text_fallback and pdf.is_file():
+                why = local_text_md(pdf, md_path(p), args.timeout)
+                if why:
+                    r["error"] = (r["error"] + " | " + why)[:MAX_ERROR]
+                else:
+                    r["status"], r["local_text"] = "md", True
+                    r["error"] = ""
         record(r)
         return r
 
