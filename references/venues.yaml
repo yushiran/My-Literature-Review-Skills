@@ -71,6 +71,16 @@ tiers:
       - Physics in Medicine and Biology
       - Scientific Reports
       - PLOS
+      # MR-physics venues that carry the MRF / quantitative-MRI literature
+      - Magnetic Resonance Materials in Physics Biology and Medicine
+      - MAGMA
+      - IEEE Transactions on Biomedical Engineering
+      - Magnetic Resonance Imaging
+      - NMR in Biomedicine
+      - Journal of Magnetic Resonance
+      - Investigative Radiology
+      - Human Brain Mapping
+      - Medical Physics
   3:
     weight: 0.6
     venues: []          # everything else with a named journal/conference

@@ -26,7 +26,29 @@ once; it is the data contract every script and agent follows.
    > `mineru-open-api auth`（交互式）或 `export MINERU_TOKEN=...`，我再继续。
    Do not fall back to `flash-extract` on your own: it drops the figures and
    caps at 20 pages. Only if the user says they will not get a token.
-5. **Semantic Scholar is optional.** Without a key it shares a public pool and
+5. **Paywalled papers have three further routes, and the credentials are the
+   user's to give.** `fetch.py` tries the open-access links first; anything
+   refused then goes through, in order, Europe PMC (free, always on), the Wiley
+   and Elsevier text-and-data-mining APIs, and an institutional EZproxy — see
+   `scripts/access.py`. Nothing is on by default, so behaviour is unchanged
+   until the user creates `~/.config/litrev/access.env`, mode 0600:
+
+   ```
+   LITREV_EZPROXY_HOST=bris.idm.oclc.org     # from any library database link
+   LITREV_COOKIES=/home/<user>/.config/litrev/cookies.txt
+   WILEY_TDM_TOKEN=...                       # MRM, NMR in Biomed, JMRI
+   ELSEVIER_API_KEY=...                      # NeuroImage, MedIA, Magn Reson Imaging
+   ELSEVIER_INSTTOKEN=...                    # only needed off the campus network
+   ```
+
+   Never read that file, never echo a token, never pass one on a command line.
+   `access.py` loads it on import, so it works across separate invocations. After
+   configuring, `fetch.py --retry-no-pdf` re-tries the papers already marked
+   `no-pdf`. EZproxy sessions expire after a few hours, so a long run may need
+   the cookie jar re-exported. This is for the user's own entitlement at reading
+   scale; the per-host limits in `fetch.py` are deliberate.
+
+6. **Semantic Scholar is optional.** Without a key it shares a public pool and
    often answers 429; `search.py` backs off, then skips it and says so.
    OpenAlex alone is enough. Mention the key only when the user asks why S2
    was skipped or asks for more coverage: register at

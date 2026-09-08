@@ -29,6 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import manifest as M  # noqa: E402
+import access as A  # noqa: E402  (Europe PMC, publisher TDM APIs, institutional proxy)
 
 MAILTO = "yushiranyushiran@gmail.com"
 USER_AGENT = (
@@ -39,6 +40,10 @@ BACKOFF = (2, 5)  # sleeps between the three attempts
 NO_RETRY = {401, 402, 403, 404}
 HOST_LIMITS = {"arxiv.org": 1}  # max concurrent requests per host
 HOST_PAUSE = {"arxiv.org": 1.0}  # seconds to hold the slot after a request
+# Publisher and proxy routes: one request at a time with a pause, as mining terms ask.
+for _h in ("api.wiley.com", "api.elsevier.com", "www.ebi.ac.uk", "onlinelibrary.wiley.com",
+           "ieeexplore.ieee.org", "www.sciencedirect.com", "link.springer.com"):
+    HOST_LIMITS[_h], HOST_PAUSE[_h] = 1, 1.5
 PREPLACE_STATES = ("selected", "pdf", "no-pdf", "failed")
 SAVE_EVERY = 5
 CHUNK = 1 << 20
@@ -73,10 +78,25 @@ def host_slot(key):
         return _host_sems.setdefault(key, threading.Semaphore(limit))
 
 
-def open_url(url, timeout):
-    req = urllib.request.Request(
-        url, headers={"User-Agent": USER_AGENT, "Accept": "application/pdf,*/*;q=0.8"}
-    )
+_opener_cache, _opener_lock = {}, threading.Lock()
+
+
+def _opener():
+    """Cookie-carrying opener when LITREV_COOKIES is set, else the default one."""
+    with _opener_lock:
+        if "o" not in _opener_cache:
+            _opener_cache["o"] = A.cookie_opener()
+        return _opener_cache["o"]
+
+
+# def open_url(url, timeout):                                  # old: no per-candidate headers
+def open_url(url, timeout, headers=None):
+    h = {"User-Agent": USER_AGENT, "Accept": "application/pdf,*/*;q=0.8"}
+    h.update(headers or {})
+    req = urllib.request.Request(url, headers=h)
+    opener = _opener()
+    if opener is not None:
+        return opener.open(req, timeout=timeout)
     return urllib.request.urlopen(req, timeout=timeout)
 
 
@@ -143,12 +163,12 @@ def body_kind(head):
     return "not a pdf"
 
 
-def download(url, timeout, dest):
+def download(url, timeout, dest, headers=None):
     """Stream url into a temp file beside dest, check the magic, then os.replace. Returns bytes."""
     fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.stem}-", suffix=".part")
     done = False
     try:
-        with os.fdopen(fd, "wb") as out, open_url(url, timeout) as r:
+        with os.fdopen(fd, "wb") as out, open_url(url, timeout, headers) as r:
             head = r.read(CHUNK)
             kind = body_kind(head)
             if kind:
@@ -181,52 +201,68 @@ def is_pdf_file(path):
 # ---------------------------------------------------------------- candidates
 
 def candidate_urls(paper):
-    """Static candidates in order: pdf_url, arXiv. OpenAlex is looked up lazily."""
+    """Static candidates in order: pdf_url, arXiv. OpenAlex is looked up lazily.
+
+    Each entry is (via, url, headers); headers is empty for these two.
+    """
     out, seen = [], set()
     url = (paper.get("pdf_url") or "").strip()
     if url:
         # An arXiv abstract page is HTML; its /pdf/ twin is the file.
         url = re.sub(r"(arxiv\.org)/abs/", r"\1/pdf/", url, flags=re.IGNORECASE)
-        out.append(("pdf_url", url))
+        out.append(("pdf_url", url, {}))
         seen.add(url)
     aid = M.norm_arxiv(paper.get("arxiv"))
     if aid:
         url = f"https://arxiv.org/pdf/{aid}"
         if url not in seen:
-            out.append(("arxiv", url))
+            out.append(("arxiv", url, {}))
     return out
 
 
-def openalex_pdf_url(doi, timeout, what):
-    """best_oa_location.pdf_url for the DOI, '' when OpenAlex has none. Raises Transient."""
-    q = urllib.parse.quote(doi, safe="/:")
-    url = f"https://api.openalex.org/works/doi:{q}?select=best_oa_location&mailto={MAILTO}"
-
+def get_json(url, timeout, what):
+    """Retrying GET returning parsed JSON. Raises Transient; Refused/ValueError -> {}."""
     def get(u, t):
         with open_url(u, t) as r:
             return json.loads(r.read())
 
     try:
-        data = with_retries(get, url, timeout, what)
-    except Refused:
-        return ""  # unknown DOI
-    except ValueError:
-        return ""
-    loc = data.get("best_oa_location") or {}
-    return (loc.get("pdf_url") or "").strip()
+        return with_retries(get, url, timeout, what)
+    except (Refused, ValueError):
+        return {}
+
+
+# def openalex_pdf_url(doi, timeout, what):          # old: only the OA pdf link
+def openalex_meta(doi, timeout, what):
+    """(oa_pdf_url, landing_page_url, pmcid) for the DOI; empty strings when absent.
+
+    The landing page and the PMC id are what the institutional and Europe PMC
+    routes in access.py need, so they come from the same single lookup.
+    """
+    q = urllib.parse.quote(doi, safe="/:")
+    url = (f"https://api.openalex.org/works/doi:{q}"
+           f"?select=best_oa_location,primary_location,ids&mailto={MAILTO}")
+    data = get_json(url, timeout, what)
+    oa = (data.get("best_oa_location") or {}).get("pdf_url") or ""
+    landing = (data.get("primary_location") or {}).get("landing_page_url") or ""
+    pmcid = ""
+    for key, val in (data.get("ids") or {}).items():
+        if key == "pmcid" and val:
+            pmcid = str(val).rstrip("/").split("/")[-1]
+    return oa.strip(), landing.strip(), pmcid
 
 
 def fetch_one(pid, paper, dest, timeout):
     """Worker: try every candidate for one paper. Returns a result dict, never raises."""
     reasons, n_refused, n_transient, tried = [], 0, 0, set()
 
-    def attempt(via, url):
+    def attempt(via, url, headers=None):
         nonlocal n_refused, n_transient
         if url in tried:
             return None
         tried.add(url)
         try:
-            size = with_retries(lambda u, t: download(u, t, dest), url, timeout, f"{pid} {via}")
+            size = with_retries(lambda u, t: download(u, t, dest, headers), url, timeout, f"{pid} {via}")
             return {"id": pid, "status": "pdf", "via": via, "size": size, "error": ""}
         except Refused as e:
             n_refused += 1
@@ -236,14 +272,15 @@ def fetch_one(pid, paper, dest, timeout):
             reasons.append(f"{via}: {e}")
         return None
 
-    for via, url in candidate_urls(paper):
-        r = attempt(via, url)
+    for via, url, headers in candidate_urls(paper):
+        r = attempt(via, url, headers)
         if r:
             return r
     doi = M.norm_doi(paper.get("doi"))
+    landing, pmcid = "", ""
     if doi:
         try:
-            url = openalex_pdf_url(doi, timeout, f"{pid} openalex")
+            url, landing, pmcid = openalex_meta(doi, timeout, f"{pid} openalex")
         except Transient as e:
             n_transient += 1
             reasons.append(f"openalex: {e}")
@@ -253,9 +290,16 @@ def fetch_one(pid, paper, dest, timeout):
                 r = attempt("openalex", url)
                 if r:
                     return r
-            else:
-                n_refused += 1
-                reasons.append("no OA link")
+    # Europe PMC, publisher mining APIs, institutional proxy: only reached when the
+    # paper has no open-access copy. Each is a no-op unless its credential is set.
+    try:
+        extra = A.candidates(paper, landing, pmcid, lambda u: get_json(u, timeout, f"{pid} epmc"))
+    except Exception as e:  # a broken route must never lose the paper
+        extra, _ = [], reasons.append(f"access: {describe(e)}")
+    for via, url, headers in extra:
+        r = attempt(via, url, headers)
+        if r:
+            return r
     if not reasons:
         reasons.append("no OA link")
     error = "; ".join(reasons)
@@ -275,6 +319,9 @@ def main():
     parser = M.base_parser("Download the open-access PDF of every selected paper.")
     parser.add_argument("--jobs", type=int, default=4, help="parallel downloads (default 4)")
     parser.add_argument("--timeout", type=float, default=60, help="per-request timeout in seconds (default 60)")
+    parser.add_argument("--retry-no-pdf", action="store_true",
+                        help="also retry papers already marked no-pdf (use after configuring "
+                             "institutional access; see access.py)")
     args = parser.parse_args()
     if args.jobs < 1 or args.timeout <= 0:
         M.log("fetch: --jobs must be >= 1 and --timeout > 0")
@@ -303,6 +350,11 @@ def main():
             n_pre += 1
             M.log(f"fetch: {p['id']}: pre-placed")
 
+    if args.retry_no_pdf:
+        for p in M.papers_in(manifest, "no-pdf"):
+            p["status"], p["error"] = "selected", ""
+        M.save(args, manifest)
+
     todo = M.papers_in(manifest, "selected")
     if not todo and not n_pre:
         M.log("fetch: nothing selected and no pre-placed pdf, nothing to do")
@@ -311,6 +363,7 @@ def main():
     if n_pre:
         M.save(args, manifest)
     M.log(f"fetch: {len(todo)} selected paper(s), {args.jobs} job(s)")
+    M.log(f"fetch: extra routes for paywalled papers: {A.configured()}")
 
     papers = manifest["papers"]
     n_pdf, n_nopdf, transient, completed = 0, 0, [], 0
