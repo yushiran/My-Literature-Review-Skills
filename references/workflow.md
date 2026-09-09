@@ -110,8 +110,9 @@ Because each script only touches papers in its input state, the main agent
 runs them as a pipeline rather than in sequence:
 
 1. `search.py` → `rank.py` (seconds).
-2. Scout reads `candidates.md`, writes `selected.json` (one agent call; for
-   more than 30 papers, batches of 30).
+2. Scout reads `candidates.md`, writes `selected.json` (one agent call; the
+   selection has no target size, and a candidate list past about a hundred
+   papers is split into batches so one call still reads every abstract).
 3. `select.py` then `pipeline.py` in a **background** shell. Fetch and
    convert both use `--jobs 4`; convert waits on MinerU, so wall-clock is
    bounded by the slowest paper, not the sum.
@@ -124,7 +125,7 @@ runs them as a pipeline rather than in sequence:
 | step | who | cost |
 | --- | --- | --- |
 | brief (questions + queries) | scout, sonnet | one short call, confirmed with the user once |
-| triage over candidates.md | scout, sonnet | the main cost; ~100 abstracts in, 30 ids out |
+| triage over candidates.md | scout, sonnet | the main cost; ~100 abstracts in, as many ids out as are relevant |
 | search / rank / fetch / convert / index | scripts | zero |
 | reading guide | librarian, opus | one call over ~30 abstracts, never full texts |
 

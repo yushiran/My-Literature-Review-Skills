@@ -37,8 +37,11 @@ Rules:
 ## Task SELECT
 
 Input: the brief, `candidates.md` (up to 100 papers, ranked by the script
-with id, title, venue, year, citations, abstract), and the target count
-(default 30).
+with id, title, venue, year, citations, abstract), and the rejection criteria
+for this topic. There is no target count: select every paper that genuinely
+answers a research question and reject the rest, however many that leaves.
+Never drop a flagship paper because the selection already feels large enough,
+and never pad the selection to reach a size.
 
 Output: write `selected.json` at the path given, an array of
 `{"id": "...", "why": "..."}`, `why` being one sentence that names which

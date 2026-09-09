@@ -12,7 +12,7 @@ references/<topic>/
 ```
 
 Search (OpenAlex, Semantic Scholar, arXiv) → rank by venue tier, citations
-and recency → a sonnet scout picks 30 → open-access PDFs are downloaded →
+and recency → a sonnet scout picks the relevant ones → open-access PDFs are downloaded →
 MinerU converts them to Markdown with figures → `INDEX.md` is generated → an
 opus librarian writes the reading guide at the top.
 

@@ -47,8 +47,21 @@ once; it is the data contract every script and agent follows.
 
 ## Build
 
-Default size is **30 papers**, chosen for quality. More only when the user
-asks.
+**There is no target size.** Take every candidate that genuinely answers a
+research question, and reject the rest however many that leaves. A library of
+fifteen is right when only fifteen are relevant, and one of sixty is right
+when sixty are. What must never happen is a flagship paper left out because a
+count was already met.
+
+The filter is relevance, not rationing, so it has to be stated as rejection
+criteria rather than a quota: keep out papers whose contribution is a domain
+application of a method rather than a method you could borrow, and let a high
+citation count on one of those count for nothing. Two papers that make the
+same point are both worth taking when both are substantive; say in the `why`
+how they differ.
+
+`select.py` warns above `--target 30`. That is a warning, not a limit; pass
+`--target <the number you actually selected>` to silence it.
 
 ### 0. Brief — one confirmation with the user
 
@@ -70,11 +83,12 @@ year × recency, each with its abstract. Venue tiers are in
 
 ### 2. Select — scout, the one costly call
 
-Give `scout` the brief and `candidates.md`; it returns `selected.json` with
-30 ids and one line of `why` each. Then:
+Give `scout` the brief and `candidates.md`, together with the rejection
+criteria for this topic; it returns `selected.json` with as many ids as earn a
+place and one line of `why` each. Then:
 
 ```sh
-uv run scripts/select.py --topic <slug> --file references/<slug>/selected.json
+uv run scripts/select.py --topic <slug> --file references/<slug>/selected.json --target <n selected>
 ```
 
 ### 3. Fetch, convert, index — scripts, in the background
