@@ -274,7 +274,15 @@ def lookup_seed(spec):
         # old: filter=locations.landing_page_url:... -- not a documented OpenAlex filter, 4xxs.
         # Chain instead: the arXiv DataCite DOI is an exact match with no extra host; if OpenAlex
         # has not indexed that DOI, fall back to a title search using arXiv's own title for it.
-        r = openalex_by_doi(M.norm_doi(f"10.48550/arxiv.{aid}"), sel)
+        # old: r = openalex_by_doi(M.norm_doi(f"10.48550/arxiv.{aid}"), sel)
+        try:
+            # An unindexed DOI is OpenAlex's normal 404, i.e. get_json_retry raises SourceDown
+            # here, not an empty result -- that is the common case (most arXiv ids have no
+            # 10.48550 DOI in OpenAlex), so treat it as a miss and fall through to arXiv's own
+            # title. RateLimited is not a miss and must still propagate.
+            r = openalex_by_doi(M.norm_doi(f"10.48550/arxiv.{aid}"), sel)
+        except SourceDown:
+            r = None
         if r:
             return r
         title = arxiv_title(aid)
