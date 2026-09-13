@@ -10,6 +10,7 @@ rel falls back to 0.5 (neutral) when a paper has no OpenAlex relevance score.
 Only papers in found/selected/rejected are listed as candidates.
 """
 import datetime as _dt
+import json
 import math
 import re
 import sys
@@ -113,7 +114,35 @@ def raw_score(paper: dict, tiers: dict, current_year: int, max_cites: float, max
     # citation rate floor the age discount. Landmark papers older than the window
     # keep their place; old and little-cited ones are unaffected.
     age_factor = max(recency(year, current_year), cites)
-    return tier_w * age_factor * (0.35 + 0.35 * cites + 0.30 * rel)
+    hits = min(int(paper.get("snowball_hits") or 0), 3)
+    # return tier_w * age_factor * (0.35 + 0.35 * cites + 0.30 * rel)                              # old: no graph signal
+    # return tier_w * age_factor * (0.35 + 0.35 * cites + 0.30 * rel) * (1 + 0.15 * hits / 3)       # old: 0.15 cap can't outrank a max-citations paper (needs >0.7, see test_only_restricts_candidates_and_snowball_bonus_orders)
+    return tier_w * age_factor * (0.35 + 0.35 * cites + 0.30 * rel) * (1 + 1.0 * hits / 3)
+
+
+FIRST_WORDS = 30
+
+
+def meta_line(p):
+    venue = p.get("venue") or "(no venue)"
+    year = p.get("year") if p.get("year") is not None else "n.d."
+    via = ",".join(p.get("found_via") or ["query"])
+    hits = int(p.get("snowball_hits") or 0)
+    return (f"{venue} (tier {p['venue_tier']}) · {year} · {int(p.get('citations') or 0)} citations"
+            f" · score {p['score']:.2f} · via:{via}" + (f" · hits:{hits}" if hits else ""))
+
+
+def write_titles(path: Path, manifest: dict, ranked: list) -> None:
+    """Cheap first pass for the scout: title + venue/year/citations/via + a 30-word snippet,
+    no abstract, no pdf line -- keeps the file small enough to always fit in one read."""
+    lines = [f"# {manifest['topic']}: {len(ranked)} candidates, titles only (first {FIRST_WORDS} words of each abstract)"]
+    lines.extend(f"- {q}" for q in manifest.get("questions") or [])
+    lines.append("")
+    for rank, p in enumerate(ranked, 1):
+        words = (p.get("abstract") or "").split()
+        lines += [f"## {rank}. {p['id']}", f"**{p.get('title') or '(no title)'}**", meta_line(p),
+                  " ".join(words[:FIRST_WORDS]) + (" …" if len(words) > FIRST_WORDS else ""), ""]
+    path.write_text("\n".join(lines) + "\n")
 
 
 def write_candidates(path: Path, manifest: dict, ranked: list, topic_dir: Path) -> None:
@@ -125,15 +154,16 @@ def write_candidates(path: Path, manifest: dict, ranked: list, topic_dir: Path) 
     lines.append("")
     for rank, p in enumerate(ranked, 1):
         has_pdf = bool(p.get("pdf_url")) or (topic_dir / p.get("pdf", "")).is_file()
-        venue = p.get("venue") or "(no venue)"
-        year = p.get("year") if p.get("year") is not None else "n.d."
-        sources = ",".join(p.get("sources") or []) or "-"
         lines.append(f"## {rank}. {p['id']}")
         lines.append(f"**{p.get('title') or '(no title)'}**")
-        lines.append(
-            f"{venue} (tier {p['venue_tier']}) · {year} · {int(p.get('citations') or 0)} citations"
-            f" · score {p['score']:.2f} · sources: {sources}"
-        )
+        # venue = p.get("venue") or "(no venue)"                                      # old: hand-built meta line
+        # year = p.get("year") if p.get("year") is not None else "n.d."               # old: hand-built meta line
+        # sources = ",".join(p.get("sources") or []) or "-"                           # old: hand-built meta line
+        # lines.append(                                                               # old: hand-built meta line
+        #     f"{venue} (tier {p['venue_tier']}) · {year} · {int(p.get('citations') or 0)} citations"
+        #     f" · score {p['score']:.2f} · sources: {sources}"
+        # )
+        lines.append(meta_line(p))
         lines.append(f"pdf: {'yes' if has_pdf else 'no'}")
         lines.append("")
         lines.append(p.get("abstract") or "(no abstract)")
@@ -145,6 +175,8 @@ def main() -> int:
     parser = M.base_parser("Score papers and write candidates.md for the scout.")
     parser.add_argument("--top", type=int, default=100, help="how many candidates to list (default 100)")
     parser.add_argument("--venues", default=str(DEFAULT_VENUES), help="venue tier file (default references/venues.yaml)")
+    parser.add_argument("--only", help="triage.json: list only its keep and undecided ids in candidates.md")
+    parser.add_argument("--new-only", action="store_true", help="list only papers found since manifest.refreshed")
     args = parser.parse_args()
     if args.top < 1:
         M.log("rank: --top must be >= 1")
@@ -178,15 +210,23 @@ def main() -> int:
         p["score"] = round(p["score"] / top_score, 4) if top_score > 0 else 0.0
 
     candidates = M.papers_in(manifest, *CANDIDATE_STATES)
-    candidates.sort(key=lambda p: (-p["score"], -int(p.get("citations") or 0), p["id"]))
-    ranked = candidates[: args.top]
-
     tdir = M.topic_dir(args)
     out = tdir / "candidates.md"
+    if args.new_only and manifest.get("refreshed"):
+        candidates = [p for p in candidates if (p.get("found_date") or "") >= manifest["refreshed"]]
+    # candidates.sort(key=lambda p: (-p["score"], -int(p.get("citations") or 0), p["id"]))    # old: no new-only filter, no titles file
+    # ranked = candidates[: args.top]                                                          # old: see above
+    ranked = sorted(candidates, key=lambda p: (-p["score"], -int(p.get("citations") or 0), p["id"]))[: args.top]
+    titles_out = tdir / "candidates_titles.md"
+    write_titles(titles_out, manifest, ranked)
+    if args.only:
+        tri = json.loads(Path(args.only).read_text())
+        allowed = set(tri.get("keep") or []) | set(tri.get("undecided") or [])
+        ranked = [p for p in ranked if p["id"] in allowed]
     write_candidates(out, manifest, ranked, tdir)
     M.save(args, manifest)
     M.log(f"rank: scored {len(papers)} papers, {len(candidates)} candidates, listed {len(ranked)}")
-    print(f"ranked={len(candidates)} candidates={len(ranked)} written={out}")
+    print(f"ranked={len(candidates)} candidates={len(ranked)} written={out} titles={titles_out}")
     if not ranked:
         M.log("rank: no paper in found/selected/rejected, nothing for the scout")
         return M.EXIT_NOTHING
