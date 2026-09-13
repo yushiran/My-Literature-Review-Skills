@@ -45,6 +45,7 @@ import os
 import re
 import stat
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -235,11 +236,16 @@ def session_alive(final_url_of):
     verify = os.environ.get("LITREV_VERIFY_URL") or "https://onlinelibrary.wiley.com/"
     try:
         final = final_url_of(ezproxy_host_rewrite(verify, proxy))
+    except urllib.error.HTTPError as e:
+        # A response came back, so the session is not what failed. Publishers behind a
+        # CDN answer 403 to non-browser clients; only the login page means logged out.
+        final = e.geturl() or ""
     except Exception as e:
         # Unreachable is not the same as bounced, and the caller only gets a bool.
-        print(f"access: proxy check failed, treating the session as stale: {e}", flush=True)
+        print(f"access: could not reach the proxy, treating the session as stale: {e}", flush=True)
         return False
-    return not PROXY_LOGIN.search(final or "")
+    # old: return not PROXY_LOGIN.search(final or "")
+    return bool(final) and not PROXY_LOGIN.search(final)   # no endpoint is not evidence of a session
 
 
 # ---------------------------------------------------------------- europe pmc
