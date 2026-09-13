@@ -273,9 +273,14 @@ def main() -> int:
                         help="when MinerU cannot fetch or accept a paper, extract its text locally "
                              "with pymupdf; keeps every word, loses figures and tables, and the entry "
                              "is marked conversion=local-text")
+    parser.add_argument("--upload-fallback", choices=("local-text", "none"), default="local-text",
+                        help="after the first MinerU upload timeout, read remaining upload-only "
+                             "papers locally (default local-text)")
     parser.add_argument("--upload", action="store_true",
                         help="always upload the local pdf; skip the arXiv / pdf_url URL attempts")
     args = parser.parse_args()
+    if args.local_text_fallback:
+        args.upload_fallback = "local-text"
     if args.jobs < 1:
         M.log("convert: --jobs must be >= 1")
         return M.EXIT_USAGE
@@ -323,6 +328,7 @@ def main() -> int:
 
     lock = threading.Lock()
     abort = threading.Event()
+    upload_dead = threading.Event()  # set once any upload times out; skips later upload-only attempts
     counts = {"md": 0, "failed": 0, "skipped": n_skip}
     token_err = []
 
@@ -361,8 +367,16 @@ def main() -> int:
             M.save(args, fresh)
 
     def work(p):
+        pdf = pdf_path(p)
         # Try each source in order; stop at the first md (or a token rejection / abort).
-        attempts = sources_of(p, pdf_path(p), args.upload)
+        attempts = sources_of(p, pdf, args.upload)
+        # Upload is known dead this run; an upload-only paper skips straight to local text.
+        if (upload_dead.is_set() and args.upload_fallback == "local-text"
+                and all(m == "upload" for m, _ in attempts) and pdf.is_file()):
+            why = local_text_md(pdf, md_path(p), args.timeout)
+            r = {"id": p["id"], "status": "failed" if why else "md", "error": why or "", "local_text": not why}
+            record(r)
+            return r
         if not attempts:
             r = {"id": p["id"], "status": "failed", "error": f"pdf not found on disk: {p['id']}.pdf", "stderr": ""}
             record(r)
@@ -376,8 +390,16 @@ def main() -> int:
         if r["status"] == "failed":
             r["error"] = " | ".join(errors)[:MAX_ERROR]
             # MinerU could neither fetch it nor accept the upload; read it locally.
-            pdf = pdf_path(p)
-            if args.local_text_fallback and pdf.is_file():
+            # old: if (any(e.startswith("upload:") and "Timeout" in e for e in errors) and not upload_dead.is_set()):
+            with lock:  # check-then-act on upload_dead must be atomic across worker threads
+                if (any(e.startswith("upload:") and "Timeout" in e for e in errors)
+                        and not upload_dead.is_set()):
+                    upload_dead.set()
+                    M.log("convert: MinerU upload timed out once; reading the rest locally "
+                          "(--upload-fallback none to disable)")
+            # old: if args.local_text_fallback and pdf.is_file():
+            if (args.local_text_fallback
+                    or (args.upload_fallback == "local-text" and upload_dead.is_set())) and pdf.is_file():
                 why = local_text_md(pdf, md_path(p), args.timeout)
                 if why:
                     r["error"] = (r["error"] + " | " + why)[:MAX_ERROR]
