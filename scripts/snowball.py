@@ -64,6 +64,7 @@ def fetch_citers(wid, since, cap):
 
 
 def main() -> int:
+    M.load_env()   # OPENALEX_API_KEY: importing search runs its module body, not its main()
     parser = M.base_parser("Add the papers one citation hop from the chosen set.")
     parser.add_argument("--from", dest="from_states", default=DEFAULT_FROM,
                         help=f"comma-separated source states (default {DEFAULT_FROM})")
