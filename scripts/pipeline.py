@@ -10,6 +10,9 @@ convert means nothing was waiting and is not an error. Exit 3 from convert
 papers need a credential refreshed; the papers that did arrive still convert and
 index, and the 2 is returned at the end so the caller knows to refresh and
 re-run. Any other non-zero exit stops and propagates.
+--refresh is the other mode: re-run the stored queries since the last refresh,
+snowball forward, rank only what is new, then stop for the scout. It does not
+fetch and does not convert.
 Contract: references/workflow.md.
 """
 import subprocess
@@ -31,9 +34,43 @@ def main() -> int:
     parser = M.base_parser("Run fetch -> convert -> index once.")
     parser.add_argument("--jobs", type=int, default=4, help="parallel jobs for fetch and convert (default 4)")
     parser.add_argument("--retry-failed", action="store_true", help="pass --retry-failed to convert")
+    parser.add_argument("--refresh", action="store_true",
+                        help="re-run the stored queries since the last refresh and stop for the scout")
     args = parser.parse_args()
 
     here = Path(__file__).resolve().parent
+    if args.refresh:
+        manifest = M.load(args)
+        queries = manifest.get("queries") or []
+        if not queries:
+            M.log("pipeline: --refresh needs stored queries; run search.py first")
+            return M.EXIT_USAGE
+        prev = manifest.get("refreshed")     # the date rank.py --new-only filters on
+        since_year = int((prev or manifest.get("created") or M.today())[:4])
+        steps = [
+            [sys.executable, str(here / "search.py"), "--topic", args.topic, "--root", args.root, "--since", str(since_year)]
+            + [x for q in queries for x in ("--query", q)],
+            [sys.executable, str(here / "snowball.py"), "--topic", args.topic, "--root", args.root, "--no-back", "--since", str(since_year)],
+            [sys.executable, str(here / "rank.py"), "--topic", args.topic, "--root", args.root, "--new-only"],
+        ]
+        for cmd in steps:
+            r = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
+            for ln in (r.stdout or "").splitlines():
+                print(f"{Path(cmd[1]).stem}: {ln}", flush=True)
+            if r.returncode not in OK_CODES:
+                return r.returncode
+        manifest = M.load(args)
+        # Stamped after the search, so papers found today still satisfy found_date >= refreshed.
+        manifest["refreshed"] = M.today()
+        M.save(args, manifest)
+        # Count on rank.py's own predicate -- its previous `refreshed`, and its
+        # candidate states -- so the number describes the file the scout opens.
+        new = [p for p in M.papers_in(manifest, "found", "selected", "rejected")
+               if not prev or (p.get("found_date") or "") >= prev]
+        print(f"refresh: {len(new)} new candidates in candidates_titles.md; "
+              "run the scout TRIAGE then SELECT, then pipeline.py", flush=True)
+        return M.EXIT_OK if new else M.EXIT_NOTHING
+
     scripts = {step: here / f"{step}.py" for step in STEPS}
     missing = [str(p) for p in scripts.values() if not p.is_file()]
     if missing:

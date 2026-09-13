@@ -220,6 +220,28 @@ def cookie_opener():
     return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
 
+# Twin of fetch.py's PROXY_LOGIN_RE; keep the two patterns in step.
+PROXY_LOGIN = re.compile(r"^https?://login\.[^/]*\.oclc\.org/|/login\?(?:qurl|url)=", re.I)
+
+
+def session_alive(final_url_of):
+    """None when no proxy is configured; else whether one proxied GET stays off the login page.
+
+    final_url_of(url) must follow redirects and return the URL it ended on.
+    """
+    proxy = (os.environ.get("LITREV_EZPROXY_HOST") or "").strip()
+    if not proxy:
+        return None
+    verify = os.environ.get("LITREV_VERIFY_URL") or "https://onlinelibrary.wiley.com/"
+    try:
+        final = final_url_of(ezproxy_host_rewrite(verify, proxy))
+    except Exception as e:
+        # Unreachable is not the same as bounced, and the caller only gets a bool.
+        print(f"access: proxy check failed, treating the session as stale: {e}", flush=True)
+        return False
+    return not PROXY_LOGIN.search(final or "")
+
+
 # ---------------------------------------------------------------- europe pmc
 
 def europepmc_pdf(doi, pmcid, fetch_json):
