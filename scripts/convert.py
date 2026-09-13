@@ -392,7 +392,8 @@ def main() -> int:
             # MinerU could neither fetch it nor accept the upload; read it locally.
             # old: if (any(e.startswith("upload:") and "Timeout" in e for e in errors) and not upload_dead.is_set()):
             with lock:  # check-then-act on upload_dead must be atomic across worker threads
-                if (any(e.startswith("upload:") and "Timeout" in e for e in errors)
+                # old: if (any(e.startswith("upload:") and "Timeout" in e for e in errors)
+                if (any(e.startswith("upload:") and "timeout" in e.lower() for e in errors)
                         and not upload_dead.is_set()):
                     upload_dead.set()
                     M.log("convert: MinerU upload timed out once; reading the rest locally "
