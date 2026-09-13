@@ -86,6 +86,11 @@ class RateLimited(Exception):
 
 # ---------------------------------------------------------------- http
 
+def safe_url(url):
+    """Strip the api_key before a URL reaches an exception message or a log."""
+    return re.sub(r"([?&]api_key=)[^&]*", r"\1<redacted>", url)
+
+
 def http_get(url, headers=None):
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
     with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
@@ -102,16 +107,21 @@ def get_json_retry(url, headers=None, name="source"):
             last = e
             if e.code == 429:
                 if attempt == len(BACKOFF):
-                    raise RateLimited(url)
+                    # old: raise RateLimited(url)
+                    raise RateLimited(safe_url(url))
             elif e.code < 500:
                 # Bad request or auth: retrying will not help.
-                raise SourceDown(f"{name} HTTP {e.code} for {url}")
+                # old: raise SourceDown(f"{name} HTTP {e.code} for {url}")
+                raise SourceDown(f"{name} HTTP {e.code} for {safe_url(url)}")
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
             last = e
         if attempt < len(BACKOFF):
-            M.log(f"{name}: {last}; retry in {BACKOFF[attempt]}s")
+            # old: M.log(f"{name}: {last}; retry in {BACKOFF[attempt]}s")
+            # a ValueError from urllib can carry the whole URL, and ValueError is caught above
+            M.log(f"{name}: {safe_url(str(last))}; retry in {BACKOFF[attempt]}s")
             time.sleep(BACKOFF[attempt])
-    raise SourceDown(f"{name} unreachable: {last}")
+    # old: raise SourceDown(f"{name} unreachable: {last}")
+    raise SourceDown(f"{name} unreachable: {safe_url(str(last))}")
 
 
 # ---------------------------------------------------------------- helpers
@@ -533,6 +543,7 @@ def merge(manifest, recs, via="query"):
 # ---------------------------------------------------------------- main
 
 def main():
+    M.load_env()   # OPENALEX_API_KEY / S2_API_KEY from ~/.config/litrev/access.env
     parser = M.base_parser("Search OpenAlex, Semantic Scholar and arXiv into manifest.json (status found).")
     # old: parser.add_argument("--query", action="append", required=True, help="search query (repeatable)")
     parser.add_argument("--query", action="append", default=[], help="search query (repeatable)")

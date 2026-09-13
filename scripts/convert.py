@@ -262,6 +262,7 @@ def convert_one(pid: str, mode: str, source: str, out_dir: Path, args, abort: th
 # ---------------------------------------------------------------- main
 
 def main() -> int:
+    M.load_env()   # MINERU_TOKEN from ~/.config/litrev/access.env, before token_gate reads it
     parser = M.base_parser("Convert `pdf` papers to Markdown with mineru-open-api extract.")
     parser.add_argument("--jobs", type=int, default=4, help="parallel conversions (default 4)")
     parser.add_argument("--model", choices=("vlm", "pipeline", "auto"), default="auto",
