@@ -261,7 +261,8 @@ def openalex_by_title(title, sel):
 def arxiv_title(aid):
     """One paper's title straight from arXiv's own API; '' if arXiv has no such id.
     Raises SourceDown on a network or parse failure, same as search_arxiv."""
-    url = f"http://export.arxiv.org/api/query?id_list={aid}&max_results=1"
+    # old: url = f"http://export.arxiv.org/api/query?id_list={aid}&max_results=1"
+    url = f"https://export.arxiv.org/api/query?id_list={aid}&max_results=1"   # http is 301'd, costing two hits on their limiter
     try:
         with M.host_gate("export.arxiv.org", 3.0):
             body = http_get(url)
@@ -398,7 +399,8 @@ def search_arxiv(query, since, limit):
     if not words:
         return []
     sq = "+AND+".join("all:" + urllib.parse.quote(w) for w in words)
-    url = (f"http://export.arxiv.org/api/query?search_query={sq}&start=0"
+    # old: url = (f"http://export.arxiv.org/api/query?search_query={sq}&start=0"
+    url = (f"https://export.arxiv.org/api/query?search_query={sq}&start=0"   # http is 301'd, costing two hits on their limiter
            f"&max_results={limit}&sortBy=submittedDate&sortOrder=descending")
     last = None
     for attempt in range(len(BACKOFF) + 1):
@@ -408,6 +410,9 @@ def search_arxiv(query, since, limit):
                 body = http_get(url)
             break
         except (urllib.error.URLError, TimeoutError, OSError) as e:
+            # arXiv meters by egress IP, so retrying a 429 from a shared node cannot help.
+            if isinstance(e, urllib.error.HTTPError) and e.code == 429:
+                raise RateLimited(url)
             last = e
             if attempt < len(BACKOFF):
                 M.log(f"arxiv: {e}; retry in {BACKOFF[attempt]}s")
@@ -431,7 +436,8 @@ def arxiv_backfill(manifest, cap=200):
         batch = targets[i:i + 50]
         # old: if i: time.sleep(3)   # replaced by the host_gate below, which also serialises with search_arxiv
         ids = ",".join(p["arxiv"] for p in batch)
-        url = f"http://export.arxiv.org/api/query?id_list={ids}&max_results=50"
+        # old: url = f"http://export.arxiv.org/api/query?id_list={ids}&max_results=50"
+        url = f"https://export.arxiv.org/api/query?id_list={ids}&max_results=50"   # http is 301'd, costing two hits on their limiter
         try:
             # old: root = ET.fromstring(http_get(url))
             with M.host_gate("export.arxiv.org", 3.0):
@@ -586,6 +592,7 @@ def main():
     # old: s2_skipped = args.no_s2
     s2_skipped = not args.s2
     s2_hint_shown = False
+    arxiv_skipped = False   # set on a 429: arXiv meters by egress IP, so the rest of the round would fail too
 
     # 1. OpenAlex, the primary source: fired for every query up front, args.jobs at a time.
     # old: this used to be step 1 inside the per-query loop below, one request at a time
@@ -625,7 +632,8 @@ def main():
 
         # 3. arXiv: "on" always searches; "auto" only when OpenAlex found fewer than 20 hits.
         # old: if not args.no_arxiv:
-        if args.arxiv == "on" or (args.arxiv == "auto" and len(oa_hits) < 20):
+        # old: if args.arxiv == "on" or (args.arxiv == "auto" and len(oa_hits) < 20):
+        if not arxiv_skipped and (args.arxiv == "on" or (args.arxiv == "auto" and len(oa_hits) < 20)):
             # old: the manual "if q is not queries[0]: time.sleep(3)" pause moved into
             # search_arxiv's own host_gate call, which paces across processes too.
             try:
@@ -633,6 +641,9 @@ def main():
                 counts["arxiv"] += len(got)
                 recs.extend(got)
                 M.log(f"arxiv:    {len(got):4d}  {q!r}")
+            except RateLimited as e:
+                arxiv_skipped = True
+                M.log(f"arxiv: skipped for the rest of the run, rate-limited by egress IP ({e})")
             except (SourceDown, ET.ParseError) as e:
                 M.log(f"arxiv: skipped for {q!r}, {e}")
 
@@ -669,7 +680,8 @@ def main():
             manifest["seeds"].append(spec)
 
     # old: filled = arxiv_backfill(manifest) if not args.no_arxiv else 0
-    filled = arxiv_backfill(manifest) if args.arxiv != "off" else 0
+    # old: filled = arxiv_backfill(manifest) if args.arxiv != "off" else 0
+    filled = arxiv_backfill(manifest) if args.arxiv != "off" and not arxiv_skipped else 0
     M.log(f"arxiv backfill: {filled} abstracts")
     for q in queries:
         if q not in manifest["queries"]:
