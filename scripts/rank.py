@@ -115,9 +115,10 @@ def raw_score(paper: dict, tiers: dict, current_year: int, max_cites: float, max
     # keep their place; old and little-cited ones are unaffected.
     age_factor = max(recency(year, current_year), cites)
     hits = min(int(paper.get("snowball_hits") or 0), 3)
-    # return tier_w * age_factor * (0.35 + 0.35 * cites + 0.30 * rel)                              # old: no graph signal
-    # return tier_w * age_factor * (0.35 + 0.35 * cites + 0.30 * rel) * (1 + 0.15 * hits / 3)       # old: 0.15 cap can't outrank a max-citations paper (needs >0.7, see test_only_restricts_candidates_and_snowball_bonus_orders)
-    return tier_w * age_factor * (0.35 + 0.35 * cites + 0.30 * rel) * (1 + 1.0 * hits / 3)
+    # return tier_w * age_factor * (0.35 + 0.35 * cites + 0.30 * rel)                          # old: no graph signal
+    # return tier_w * age_factor * (0.35 + 0.35 * cites + 0.30 * rel) * (1 + 1.0 * hits / 3)  # old: hits>=1 repeats found_via
+    # /2 is cap(3)-1: if the min(hits, 3) cap above ever becomes 4, this must become /3
+    return tier_w * age_factor * (0.35 + 0.35 * cites + 0.30 * rel) * (1 + max(0, hits - 1) / 2)
 
 
 FIRST_WORDS = 30
@@ -140,8 +141,9 @@ def write_titles(path: Path, manifest: dict, ranked: list) -> None:
     lines.append("")
     for rank, p in enumerate(ranked, 1):
         words = (p.get("abstract") or "").split()
-        lines += [f"## {rank}. {p['id']}", f"**{p.get('title') or '(no title)'}**", meta_line(p),
-                  " ".join(words[:FIRST_WORDS]) + (" …" if len(words) > FIRST_WORDS else ""), ""]
+        # snippet = " ".join(words[:FIRST_WORDS]) + (" …" if len(words) > FIRST_WORDS else "")  # old: blank on empty abstract, not "(no abstract)"
+        snippet = (" ".join(words[:FIRST_WORDS]) + (" …" if len(words) > FIRST_WORDS else "")) if words else "(no abstract)"
+        lines += [f"## {rank}. {p['id']}", f"**{p.get('title') or '(no title)'}**", meta_line(p), snippet, ""]
     path.write_text("\n".join(lines) + "\n")
 
 
@@ -210,6 +212,7 @@ def main() -> int:
         p["score"] = round(p["score"] / top_score, 4) if top_score > 0 else 0.0
 
     candidates = M.papers_in(manifest, *CANDIDATE_STATES)
+    n_pool = len(candidates)          # for the empty-result log below: was there ever anything at all?
     tdir = M.topic_dir(args)
     out = tdir / "candidates.md"
     if args.new_only and manifest.get("refreshed"):
@@ -219,16 +222,30 @@ def main() -> int:
     ranked = sorted(candidates, key=lambda p: (-p["score"], -int(p.get("citations") or 0), p["id"]))[: args.top]
     titles_out = tdir / "candidates_titles.md"
     write_titles(titles_out, manifest, ranked)
+    n_before_only = len(ranked)       # for the empty-result log below: did --only empty it?
     if args.only:
-        tri = json.loads(Path(args.only).read_text())
-        allowed = set(tri.get("keep") or []) | set(tri.get("undecided") or [])
+        try:
+            tri = json.loads(Path(args.only).read_text())
+            keep, undecided = tri.get("keep") or [], tri.get("undecided") or []
+            if not isinstance(keep, list) or not isinstance(undecided, list):
+                raise ValueError("'keep' and 'undecided' must be lists")
+            allowed = set(keep) | set(undecided)
+        except (OSError, json.JSONDecodeError, AttributeError, ValueError) as e:
+            M.log(f"rank: cannot read {args.only}: {e}")
+            return M.EXIT_USAGE
         ranked = [p for p in ranked if p["id"] in allowed]
     write_candidates(out, manifest, ranked, tdir)
     M.save(args, manifest)
     M.log(f"rank: scored {len(papers)} papers, {len(candidates)} candidates, listed {len(ranked)}")
     print(f"ranked={len(candidates)} candidates={len(ranked)} written={out} titles={titles_out}")
     if not ranked:
-        M.log("rank: no paper in found/selected/rejected, nothing for the scout")
+        # M.log("rank: no paper in found/selected/rejected, nothing for the scout")  # old: --only/--new-only can empty ranked too
+        if args.new_only and n_pool and not candidates:
+            M.log(f"rank: --new-only found nothing since manifest.refreshed ({manifest.get('refreshed')}), nothing for the scout")
+        elif args.only and n_before_only:
+            M.log("rank: --only (triage.json) kept none of the ranked candidates, nothing for the scout")
+        else:
+            M.log("rank: no paper in found/selected/rejected, nothing for the scout")
         return M.EXIT_NOTHING
     return M.EXIT_OK
 
