@@ -38,8 +38,6 @@ OPENALEX_SELECT = ",".join([
     "id", "doi", "ids", "title", "publication_year", "cited_by_count",
     "authorships", "primary_location", "best_oa_location", "locations",
     "abstract_inverted_index", "relevance_score",
-    # old: referenced_works not selected; added so Task 6's snowball.py can read it
-    "referenced_works",
 ])
 S2_FIELDS = "title,abstract,year,venue,citationCount,externalIds,openAccessPdf,publicationDate,authors"
 ATOM = "{http://www.w3.org/2005/Atom}"
@@ -225,32 +223,63 @@ def search_openalex(query, since, limit):
     return out[:limit]
 
 
-def lookup_seed(spec):
-    """Resolve 'doi:…', 'arxiv:…' or a title to one OpenAlex record, or None."""
-    spec = spec.strip()
+def openalex_by_doi(doi, sel):
+    """One exact OpenAlex works/<doi> lookup, gated; None if OpenAlex has no such work."""
     base = "https://api.openalex.org/works"
-    sel = {"select": OPENALEX_SELECT, "mailto": MAILTO}
     with M.host_gate("api.openalex.org", 0.1):
-        if spec.lower().startswith("doi:"):
-            doi = M.norm_doi(spec[4:])
-            w = get_json_retry(f"{base}/https://doi.org/{doi}?{urllib.parse.urlencode(sel)}", name="openalex")
-            return openalex_record(w) if w.get("id") else None
-        if spec.lower().startswith("arxiv:"):
-            aid = M.norm_arxiv(spec[6:])
-            filt = {"filter": f"locations.landing_page_url:https://arxiv.org/abs/{aid}", "per-page": 1, **sel}
-            data = get_json_retry(f"{base}?{urllib.parse.urlencode(filt)}", name="openalex")
-            hits = data.get("results") or []
-            return openalex_record(hits[0]) if hits else None
-        filt = {"filter": f"title.search:{spec}", "per-page": 5, "sort": "cited_by_count:desc", **sel}
+        w = get_json_retry(f"{base}/https://doi.org/{doi}?{urllib.parse.urlencode(sel)}", name="openalex")
+    return openalex_record(w) if w.get("id") else None
+
+
+def openalex_by_title(title, sel):
+    """Top-5-by-citations OpenAlex title search; an exact fuzzy-title match wins, else the
+    most-cited hit (logged, since it is a guess)."""
+    base = "https://api.openalex.org/works"
+    filt = {"filter": f"title.search:{title}", "per-page": 5, "sort": "cited_by_count:desc", **sel}
+    with M.host_gate("api.openalex.org", 0.1):
         data = get_json_retry(f"{base}?{urllib.parse.urlencode(filt)}", name="openalex")
     hits = [openalex_record(w) for w in data.get("results") or []]
-    exact = [h for h in hits if M.fuzzy_title(h["title"]) == M.fuzzy_title(spec)]
+    exact = [h for h in hits if M.fuzzy_title(h["title"]) == M.fuzzy_title(title)]
     if exact:
         return exact[0]
     if hits:
-        M.log(f"seed: no exact title match for {spec!r}; taking the most cited hit {hits[0]['title']!r}")
+        M.log(f"seed: no exact title match for {title!r}; taking the most cited hit {hits[0]['title']!r}")
         return hits[0]
     return None
+
+
+def arxiv_title(aid):
+    """One paper's title straight from arXiv's own API; '' if arXiv has no such id.
+    Raises SourceDown on a network or parse failure, same as search_arxiv."""
+    url = f"http://export.arxiv.org/api/query?id_list={aid}&max_results=1"
+    try:
+        with M.host_gate("export.arxiv.org", 3.0):
+            body = http_get(url)
+        entry = ET.fromstring(body).find(ATOM + "entry")
+    except (urllib.error.URLError, TimeoutError, OSError, ET.ParseError) as e:
+        raise SourceDown(f"arxiv unreachable: {e}")
+    return clean(entry.findtext(ATOM + "title")) if entry is not None else ""
+
+
+def lookup_seed(spec):
+    """Resolve 'doi:…', 'arxiv:…' or a title to one OpenAlex record, or None."""
+    spec = spec.strip()
+    sel = {"select": OPENALEX_SELECT, "mailto": MAILTO}
+    if os.environ.get("OPENALEX_API_KEY"):
+        sel["api_key"] = os.environ["OPENALEX_API_KEY"]
+    if spec.lower().startswith("doi:"):
+        return openalex_by_doi(M.norm_doi(spec[4:]), sel)
+    if spec.lower().startswith("arxiv:"):
+        aid = M.norm_arxiv(spec[6:])
+        # old: filter=locations.landing_page_url:... -- not a documented OpenAlex filter, 4xxs.
+        # Chain instead: the arXiv DataCite DOI is an exact match with no extra host; if OpenAlex
+        # has not indexed that DOI, fall back to a title search using arXiv's own title for it.
+        r = openalex_by_doi(M.norm_doi(f"10.48550/arxiv.{aid}"), sel)
+        if r:
+            return r
+        title = arxiv_title(aid)
+        return openalex_by_title(title, sel) if title else None
+    return openalex_by_title(spec, sel)
 
 
 # ---------------------------------------------------------------- semantic scholar
@@ -525,8 +554,9 @@ def main():
         args.arxiv = "off"
 
     queries = [q.strip() for q in args.query if q.strip()]
-    # old: if not queries:
-    if not queries and not args.seed:
+    seeds = [s.strip() for s in args.seed if s.strip()]  # blank-filtered, same as queries
+    # old: if not queries and not args.seed:
+    if not queries and not seeds:
         M.log("search.py: at least one non-empty --query or --seed is required")
         sys.exit(M.EXIT_USAGE)
     manifest = M.load(args)
@@ -591,7 +621,8 @@ def main():
 
     # Seeds: canonical papers named in the brief, force-selected regardless of --since.
     seeded = 0
-    for spec in args.seed:
+    # old: for spec in args.seed:
+    for spec in seeds:
         try:
             r = lookup_seed(spec)
         except (SourceDown, RateLimited) as e:
@@ -604,6 +635,10 @@ def main():
         merge(manifest, [r], via="seed")
         pid = next(iter(set(manifest["papers"]) - before), None) or next(
             (p["id"] for p in manifest["papers"].values() if p.get("openalex") == r["openalex"]), None)
+        if pid is None:
+            # r had no title, so merge() dropped it outright: nothing to promote.
+            M.log(f"seed: {spec!r} resolved to a record with no title; skipped")
+            continue
         p = manifest["papers"][pid]
         if p["status"] in ("found", "rejected"):
             p["status"], p["why"] = "selected", "seed: named in the brief"
