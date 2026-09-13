@@ -260,6 +260,10 @@ def openalex_meta(doi, timeout, what):
     q = urllib.parse.quote(doi, safe="/:")
     url = (f"https://api.openalex.org/works/doi:{q}"
            f"?select=best_oa_location,primary_location,ids&mailto={MAILTO}")
+    api_key = os.environ.get("OPENALEX_API_KEY")
+    if api_key:
+        # Runs once per paper, and the anonymous pool is 1000 requests a day against 10000.
+        url += "&api_key=" + urllib.parse.quote(api_key, safe="")
     data = get_json(url, timeout, what)
     oa = (data.get("best_oa_location") or {}).get("pdf_url") or ""
     landing = (data.get("primary_location") or {}).get("landing_page_url") or ""

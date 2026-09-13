@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 import manifest as M
 import access as A
+import fetch as F
 import pipeline as P
 
 # What rank.py prints; candidates= is its count after every filter and the --top cap.
@@ -58,3 +59,14 @@ def test_refresh_counts_from_the_manifest_when_rank_prints_no_count(args, monkey
     sys.argv = ["pipeline.py", "--topic", args.topic, "--root", args.root, "--refresh"]
     assert P.main() == M.EXIT_OK
     assert "refresh: 1 new candidates" in capsys.readouterr().out
+
+
+def test_openalex_meta_sends_the_api_key_only_when_it_is_set(monkeypatch):
+    seen = []
+    monkeypatch.setattr(F, "get_json", lambda url, timeout, what: (seen.append(url), {})[1])
+    monkeypatch.setenv("OPENALEX_API_KEY", "k123")
+    F.openalex_meta("10.1/x", 10, "w")
+    monkeypatch.delenv("OPENALEX_API_KEY")
+    F.openalex_meta("10.1/x", 10, "w")
+    assert "api_key=k123" in seen[0]      # once per paper, so the anonymous pool runs out
+    assert "api_key" not in seen[1]
