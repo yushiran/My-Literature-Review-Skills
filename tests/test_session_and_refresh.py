@@ -115,6 +115,24 @@ def test_refresh_defers_a_partial_search_and_still_ranks(args, monkeypatch, caps
     assert "refresh: 3 new candidates" in out
 
 
+def test_refresh_exits_cleanly_on_ctrl_c(args, monkeypatch):
+    seed(args)
+    all_scripts_exist(monkeypatch)
+    ran = []
+
+    def run(cmd, **kw):
+        ran.append(cmd)
+        if Path(cmd[1]).name == "snowball.py":
+            raise KeyboardInterrupt
+        return type("R", (), {"returncode": M.EXIT_OK, "stdout": "ok"})()
+
+    monkeypatch.setattr(P.subprocess, "run", run)
+    sys.argv = ["pipeline.py", "--topic", args.topic, "--root", args.root, "--refresh"]
+    assert P.main() == M.EXIT_USAGE
+    assert [Path(c[1]).name for c in ran] == ["search.py", "snowball.py"]   # rank never starts
+    assert "refreshed" not in M.load(args)
+
+
 def test_refresh_stops_when_a_step_script_is_missing(args, monkeypatch):
     seed(args)
     real = P.Path.is_file

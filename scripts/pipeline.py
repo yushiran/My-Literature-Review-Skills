@@ -70,7 +70,11 @@ def main() -> int:
         counted, deferred = "", M.EXIT_OK   # a partial search, reported after rank has run
         for cmd in steps:
             step = Path(cmd[1]).stem
-            r = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
+            try:
+                r = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
+            except KeyboardInterrupt:
+                M.log(f"pipeline: interrupted during {step}")
+                return M.EXIT_USAGE
             lines = [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
             for ln in lines:
                 print(f"{step}: {ln}", flush=True)
