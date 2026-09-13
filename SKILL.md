@@ -91,7 +91,7 @@ uv run scripts/rank.py   --topic <slug> --top 120
 ```
 
 Seeds enter as `selected`. Read the `saturation:` line: it is the share of
-what the round returned that was new, so under 5 % means the library already
+what the round returned that was new, so 5 % or less means the library already
 held almost all of it and this query axis is exhausted; go to snowball rather
 than adding queries.
 arXiv is searched only when OpenAlex returns fewer than 20 hits for a query
@@ -121,10 +121,12 @@ look for `selected.partial.json`; relaunch and tell it to continue from there.
 
 ```sh
 uv run scripts/snowball.py --topic <slug> --since <year>
-uv run scripts/rank.py --topic <slug> --new-only
+uv run scripts/rank.py --topic <slug>
 ```
 
-One hop back finds the canon, one hop forward the newest followers. Repeat
+One hop back finds the canon, one hop forward the newest followers. Ranking
+here covers the whole library, not just the new papers: `--new-only` needs a
+`refreshed` date, and only `pipeline.py --refresh` ever sets one. Repeat
 triage and select on `candidates_titles.md`; stop when snowball's `new` is
 under 5 % of the library.
 
@@ -163,8 +165,9 @@ which steps arXiv/S2 skipped; the `found_via` split (query / seed / snowball).
 uv run scripts/pipeline.py --topic <slug> --refresh
 ```
 
-Re-runs the stored queries since the last refresh, snowballs forward from the
-converted papers, ranks only the new ones, and stops for triage + select.
+Re-runs the stored queries since the last refresh, snowballs forward from
+everything past selection, ranks only the new ones, and stops for triage +
+select.
 Then `pipeline.py` as usual and `index.py --dump-abstracts --new-only` for the
 librarian, giving it the previous `guide.md` so it writes a delta.
 
