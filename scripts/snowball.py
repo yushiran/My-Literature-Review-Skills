@@ -135,6 +135,7 @@ def main() -> int:
         if p.get("openalex") in hits:
             p["snowball_hits"] = max(int(p.get("snowball_hits") or 0), hits[p["openalex"]])
     hits2 = sum(1 for w, n in hits.items() if n >= 2 and w in raw)
+    # Distinct works reached in each direction, known or not; "new" above is the subset that merged.
     back_count = sum(1 for v in via.values() if v == "snowball-back")
     forward_count = sum(1 for v in via.values() if v == "snowball-forward")
     # old: manifest.setdefault("rounds", []).append({"date": M.today(), "kind": "snowball", "sources": len(sources), "new": new, "total_before": total_before, "since": args.since})
