@@ -5,12 +5,15 @@ it, changes only the papers in its input state, and saves atomically. Schema
 and state machine: references/workflow.md.
 """
 import argparse
+import contextlib
 import datetime as _dt
+import fcntl
 import json
 import os
 import re
 import sys
 import tempfile
+import time
 import unicodedata
 from pathlib import Path
 
@@ -64,6 +67,31 @@ def save(args, manifest: dict) -> None:
         json.dump(manifest, f, indent=1, ensure_ascii=False)
     os.chmod(tmp, 0o666 & ~UMASK)  # mkstemp files start at 0600
     os.replace(tmp, p)
+
+
+@contextlib.contextmanager
+def host_gate(host: str, min_interval: float = 0.0):
+    """One request at a time per host across every process on this machine, at least
+    min_interval seconds apart. arXiv asks for 3 s; three parallel searches produced
+    nothing but 429s without this."""
+    lock_dir = os.environ.get("LITREV_LOCK_DIR") or os.path.expanduser("~/.cache/litrev/locks")
+    os.makedirs(lock_dir, exist_ok=True)
+    lock_path = os.path.join(lock_dir, host.replace("/", "_") + ".lock")
+    with open(lock_path, "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            lock.seek(0)
+            last = float(lock.read().strip() or 0)
+            wait = last + min_interval - time.time()
+            if wait > 0:
+                time.sleep(wait)
+            yield
+        finally:
+            lock.seek(0)
+            lock.truncate()
+            lock.write(str(time.time()))
+            lock.flush()
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def papers_in(manifest: dict, *states: str) -> list:
