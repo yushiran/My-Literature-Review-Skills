@@ -90,8 +90,10 @@ uv run scripts/search.py --topic <slug> --since <year> --query "…" … --seed 
 uv run scripts/rank.py   --topic <slug> --top 120
 ```
 
-Seeds enter as `selected`. Read the `saturation:` line: under 5 % new means
-this query axis is exhausted; go to snowball rather than adding queries.
+Seeds enter as `selected`. Read the `saturation:` line: it is the share of
+what the round returned that was new, so under 5 % means the library already
+held almost all of it and this query axis is exhausted; go to snowball rather
+than adding queries.
 arXiv is searched only when OpenAlex returns fewer than 20 hits for a query
 (`--arxiv on` to force); Semantic Scholar needs `--s2` and a key.
 
