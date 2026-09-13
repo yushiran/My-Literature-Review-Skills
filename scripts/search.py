@@ -377,17 +377,37 @@ def arxiv_backfill(manifest, cap=200):
 FILL_FIELDS = ("title", "year", "abstract", "pdf_url", "doi", "arxiv", "s2", "openalex", "venue")
 
 
-def merge(manifest, recs):
-    """Adds recs to manifest; returns number of new papers."""
-    by_doi, by_arxiv, by_title = {}, {}, {}
+PREPRINT_VENUES = ("arxiv", "biorxiv", "medrxiv", "ssrn", "")
+
+
+def near_duplicate(p: dict, r: dict) -> bool:
+    """Same paper under a slightly different title: fused-hyphen match, or same first
+    author + year and >= 80 % shared informative title tokens."""
+    if M.fuzzy_title(p.get("title")) == M.fuzzy_title(r["title"]):
+        return True
+    a, b = M.title_tokens(p.get("title")), M.title_tokens(r["title"])
+    if not a or not b:
+        return False
+    same_author = M.surname((p.get("authors") or [""])[0]) == M.surname((r["authors"] or [""])[0])
+    same_year = p.get("year") in (None, r["year"]) or r["year"] is None
+    return same_author and same_year and len(a & b) / len(a | b) >= 0.8
+
+
+# def merge(manifest, recs):                              # old: no provenance
+def merge(manifest, recs, via="query"):
+    """Adds recs to manifest tagged with how they were found; returns number of new papers."""
+    by_doi, by_arxiv, by_title, by_fuzzy, by_openalex = {}, {}, {}, {}, {}
 
     def index(p):
         if p.get("doi"):
             by_doi.setdefault(M.norm_doi(p["doi"]), p["id"])
         if p.get("arxiv"):
             by_arxiv.setdefault(M.norm_arxiv(p["arxiv"]), p["id"])
+        if p.get("openalex"):
+            by_openalex.setdefault(p["openalex"], p["id"])
         if p.get("title"):
             by_title.setdefault(M.norm_title(p["title"]), p["id"])
+            by_fuzzy.setdefault(M.fuzzy_title(p["title"]), p["id"])
 
     for p in manifest["papers"].values():
         index(p)
@@ -398,12 +418,23 @@ def merge(manifest, recs):
             continue
         pid = (by_doi.get(r["doi"]) if r["doi"] else None) \
             or (by_arxiv.get(r["arxiv"]) if r["arxiv"] else None) \
-            or by_title.get(M.norm_title(r["title"]))
+            or (by_openalex.get(r["openalex"]) if r.get("openalex") else None) \
+            or by_title.get(M.norm_title(r["title"])) \
+            or by_fuzzy.get(M.fuzzy_title(r["title"]))
+        if not pid:
+            # Last resort: same first author and year, near-identical token set.
+            pid = next((q["id"] for q in manifest["papers"].values() if near_duplicate(q, r)), None)
         if pid:
             p = manifest["papers"][pid]
             for k in FILL_FIELDS:
                 if not p.get(k) and r.get(k):
                     p[k] = r[k]
+            # A published version outranks the preprint record it matched.
+            if (p.get("venue") or "").lower() in PREPRINT_VENUES and (r["venue"] or "").lower() not in PREPRINT_VENUES:
+                p["venue"], p["year"] = r["venue"], r["year"] or p.get("year")
+                if r["doi"]:
+                    p["doi"] = r["doi"]
+                M.log(f"merge: {pid}: published version found ({r['venue']})")
             if not p.get("authors") and r["authors"]:
                 p["authors"] = r["authors"]
             p["citations"] = max(int(p.get("citations") or 0), r["citations"])
@@ -411,12 +442,14 @@ def merge(manifest, recs):
                 p["relevance"] = r["relevance"] if p.get("relevance") is None else max(p["relevance"], r["relevance"])
             if r["source"] not in p.setdefault("sources", []):
                 p["sources"].append(r["source"])
+            if via not in p.setdefault("found_via", []):
+                p["found_via"].append(via)
             index(p)
             continue
         first = r["authors"][0] if r["authors"] else ""
         pid = M.make_id(manifest, r["year"], first, r["title"])
         fields = {k: v for k, v in r.items() if k != "source"}
-        p = M.new_paper(pid, sources=[r["source"]], **fields)
+        p = M.new_paper(pid, sources=[r["source"]], found_via=[via], **fields)
         manifest["papers"][pid] = p
         index(p)
         new += 1

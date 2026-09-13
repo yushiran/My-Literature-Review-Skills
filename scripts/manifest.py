@@ -119,6 +119,19 @@ def norm_arxiv(aid) -> str:
     return m.group(1) if m else aid.strip().lower()
 
 
+def today() -> str:
+    return _dt.date.today().isoformat()
+
+
+def fuzzy_title(title: str) -> str:
+    """norm_title after fusing hyphenated words: 'multi-modal' == 'multimodal'."""
+    return norm_title((title or "").replace("-", ""))
+
+
+def title_tokens(title: str) -> set:
+    return {t for t in ascii_slug(title).split() if t not in STOPWORDS and len(t) > 1}
+
+
 def new_paper(pid: str, **fields) -> dict:
     p = {
         "id": pid, "title": "", "authors": [], "year": None, "venue": "",
@@ -127,6 +140,7 @@ def new_paper(pid: str, **fields) -> dict:
         "relevance": None,  # OpenAlex relevance_score, or null for S2/arXiv-only hits
         "score": 0.0, "status": "found", "why": "",
         "pdf": f"pdf/{pid}.pdf", "md": f"md/{pid}/{pid}.md", "error": "",
+        "found_via": [], "found_date": today(), "snowball_hits": 0,
     }
     p.update({k: v for k, v in fields.items() if v is not None})
     return p
