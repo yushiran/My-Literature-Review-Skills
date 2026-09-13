@@ -5,10 +5,13 @@
 """Write INDEX.md for a topic from manifest.json.
 
 Lists every paper past selection (selected, pdf, no-pdf, md, failed) as a
-table plus one abstract block each. A reading guide sits between
+table plus one abstract block each. Selected/no-pdf/failed papers and any
+local-text conversion are called out in a header block and, in the dump,
+an inline marker. A reading guide sits between
 <!-- guide --> markers at the top: --guide replaces it, otherwise the block
 already in INDEX.md is kept, otherwise a placeholder. --dump-abstracts prints
-the questions and abstracts for the librarian and writes nothing.
+the questions and abstracts for the librarian and writes nothing;
+--new-only then restricts the dump to papers found since manifest.refreshed.
 Contract: references/workflow.md.
 """
 import datetime as _dt
@@ -202,15 +205,18 @@ def main() -> int:
     manifest = M.load(args)
     tdir = M.topic_dir(args)
     papers = sorted(M.papers_in(manifest, *LISTED_STATES), key=sort_key)
-    if args.new_only and manifest.get("refreshed"):
-        papers = [p for p in papers if (p.get("found_date") or "") >= manifest["refreshed"]]
+    # old: if args.new_only and manifest.get("refreshed"):
+    # old:     papers = [p for p in papers if (p.get("found_date") or "") >= manifest["refreshed"]]
     if not papers:
         M.log(f"index: no paper past selection for topic {args.topic}, nothing to index")
         return M.EXIT_NOTHING
 
     if args.dump_abstracts:
-        sys.stdout.write(render_dump(manifest, papers))
-        M.log(f"index: dumped {len(papers)} abstracts")
+        dump_papers = papers  # local to the dump: INDEX.md below must always see every paper
+        if args.new_only and manifest.get("refreshed"):
+            dump_papers = [p for p in papers if (p.get("found_date") or "") >= manifest["refreshed"]]
+        sys.stdout.write(render_dump(manifest, dump_papers))
+        M.log(f"index: dumped {len(dump_papers)} abstracts")
         return M.EXIT_OK
 
     index_path = tdir / "INDEX.md"

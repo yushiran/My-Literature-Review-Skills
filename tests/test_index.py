@@ -35,3 +35,10 @@ def test_dump_marks_unread_and_new_only(args, capsys):
     assert "### c [unread: no-pdf]" in out and "### d [text-only]" in out and "### a\n" in out
     assert run(args, ["--dump-abstracts", "--new-only"]) == 0
     assert "### a" not in capsys.readouterr().out
+
+
+def test_new_only_without_dump_still_writes_full_index(args):
+    lib(args)
+    assert run(args, ["--new-only"]) == 0
+    t = (M.topic_dir(args) / "INDEX.md").read_text()
+    assert "### a" in t
