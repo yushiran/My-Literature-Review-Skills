@@ -5,7 +5,8 @@
 """Apply the scout's selected.json to the manifest.
 
 Listed ids become `selected`; every other `found` paper that appears in
-candidates.md becomes `rejected`. Papers already past selection are left alone.
+candidates.md, or in --triage's drop list, becomes `rejected`. Papers already
+past selection are left alone.
 """
 import json
 import re
@@ -96,11 +97,16 @@ def main() -> int:
     drop = set()
     if args.triage:
         try:
-            drop = set(json.loads(Path(args.triage).read_text()).get("drop") or [])
-        except (OSError, json.JSONDecodeError, AttributeError) as e:
+            # drop = set(json.loads(Path(args.triage).read_text()).get("drop") or [])     # old: didn't check 'drop' is a list
+            drop_list = json.loads(Path(args.triage).read_text()).get("drop") or []
+            if not isinstance(drop_list, list):
+                raise ValueError("'drop' must be a list")
+            drop = set(drop_list)
+        except (OSError, json.JSONDecodeError, AttributeError, ValueError) as e:
             M.log(f"select: cannot read {args.triage}: {e}")
             return M.EXIT_USAGE
-    if not cands:
+    # if not cands:     # old: false once a non-empty drop list could reject on its own
+    if not cands and not drop:
         M.log(f"select: no candidates found in {cand_path}, rejecting nothing")
     n_rejected = 0
     for p in M.papers_in(manifest, "found"):

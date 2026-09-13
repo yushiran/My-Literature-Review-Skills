@@ -5,13 +5,11 @@ from pathlib import Path
 
 import manifest as M
 
-# stdlib 'select' is a compiled-in builtin here, unshadowable via sys.path;
-# load scripts/select.py under that name so the import below binds to it.
+# stdlib 'select' is a compiled-in builtin; load scripts/select.py directly instead of importing it.
 _select_spec = importlib.util.spec_from_file_location(
-    "select", Path(__file__).resolve().parents[1] / "scripts" / "select.py")
-sys.modules["select"] = importlib.util.module_from_spec(_select_spec)
-_select_spec.loader.exec_module(sys.modules["select"])
-import select as SEL
+    "scripts.select", Path(__file__).resolve().parents[1] / "scripts" / "select.py")
+SEL = importlib.util.module_from_spec(_select_spec)
+_select_spec.loader.exec_module(SEL)
 
 
 def make_lib(args, ids_status):
@@ -34,8 +32,30 @@ def test_selected_but_unfetched_is_left_alone(args):
     (d / "sel.json").write_text(json.dumps([{"id": "c", "why": "w"}]))
     assert run(args, ["--file", str(d / "sel.json"), "--target", "1"]) == 0
     m = M.load(args)
-    assert m["papers"]["a"]["status"] == "selected"   # was rejected before the fix
+    assert m["papers"]["a"]["status"] == "selected"   # a re-run leaves an already-selected, not-yet-fetched paper alone
     assert m["papers"]["b"]["status"] == "rejected" and m["papers"]["c"]["status"] == "selected"
+
+
+def test_reselecting_refreshes_why_when_new_is_nonempty(args):
+    d = make_lib(args, {"a": "selected"})
+    m = M.load(args)
+    m["papers"]["a"]["why"] = "old reason"
+    M.save(args, m)
+    (d / "sel.json").write_text(json.dumps([{"id": "a", "why": "new reason"}]))
+    assert run(args, ["--file", str(d / "sel.json"), "--target", "1"]) == 0
+    p = M.load(args)["papers"]["a"]
+    assert p["status"] == "selected" and p["why"] == "new reason"
+
+
+def test_reselecting_keeps_why_when_new_is_empty(args):
+    d = make_lib(args, {"a": "selected"})
+    m = M.load(args)
+    m["papers"]["a"]["why"] = "old reason"
+    M.save(args, m)
+    (d / "sel.json").write_text(json.dumps([{"id": "a", "why": ""}]))
+    assert run(args, ["--file", str(d / "sel.json"), "--target", "1"]) == 0
+    p = M.load(args)["papers"]["a"]
+    assert p["status"] == "selected" and p["why"] == "old reason"
 
 
 def test_triage_drop_list_is_rejected(args):
@@ -43,5 +63,16 @@ def test_triage_drop_list_is_rejected(args):
     (d / "sel.json").write_text(json.dumps([{"id": "a", "why": "w"}]))
     (d / "triage.json").write_text(json.dumps({"keep": ["a"], "drop": ["b"], "undecided": []}))
     (d / "candidates.md").write_text("## 1. a\n")          # b is not even in candidates.md
+    assert run(args, ["--file", str(d / "sel.json"), "--triage", str(d / "triage.json"), "--target", "1"]) == 0
+    m = M.load(args)
+    assert m["papers"]["b"]["status"] == "rejected"
+    assert m["papers"]["a"]["status"] == "selected"   # drop never overrides a paper this run selected
+
+
+def test_triage_drop_rejects_with_no_candidates_file(args):
+    d = make_lib(args, {"a": "found", "b": "found"})
+    (d / "sel.json").write_text(json.dumps([{"id": "a", "why": "w"}]))
+    (d / "triage.json").write_text(json.dumps({"keep": ["a"], "drop": ["b"], "undecided": []}))
+    (d / "candidates.md").write_text("")          # no candidates this run, drop is the only rejection source
     assert run(args, ["--file", str(d / "sel.json"), "--triage", str(d / "triage.json"), "--target", "1"]) == 0
     assert M.load(args)["papers"]["b"]["status"] == "rejected"
