@@ -33,7 +33,8 @@ token or cookie is ever logged.
 Rather than exporting them, put those lines in ~/.config/litrev/access.env
 (mode 0600, `KEY=value` per line, `#` comments allowed) and this module reads it
 on import. That way the secret never has to be typed into a shell that logs its
-history, and it survives across separate script invocations.
+history, and it survives across separate script invocations. The same file also
+carries OPENALEX_API_KEY and S2_API_KEY, which search.py reads.
 
 Use only your own entitlement, and keep the concurrency low: fetch.py caps
 these hosts at one request at a time and pauses between them, which is what

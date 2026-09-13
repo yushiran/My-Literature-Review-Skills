@@ -16,3 +16,10 @@ def args(tmp_path):
 @pytest.fixture(autouse=True)
 def _lock_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("LITREV_LOCK_DIR", str(tmp_path / "locks"))
+
+
+@pytest.fixture(autouse=True)
+def _no_real_credentials(tmp_path, monkeypatch):
+    """search.main() calls M.load_env(), so point it at a file that does not exist:
+    no test may read the real ~/.config/litrev/access.env into this process."""
+    monkeypatch.setenv("LITREV_ENV_FILE", str(tmp_path / "no-such.env"))
