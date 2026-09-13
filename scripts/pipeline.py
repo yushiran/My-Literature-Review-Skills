@@ -15,6 +15,7 @@ snowball forward, rank only what is new, then stop for the scout. It does not
 fetch and does not convert.
 Contract: references/workflow.md.
 """
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -53,23 +54,30 @@ def main() -> int:
             [sys.executable, str(here / "snowball.py"), "--topic", args.topic, "--root", args.root, "--no-back", "--since", str(since_year)],
             [sys.executable, str(here / "rank.py"), "--topic", args.topic, "--root", args.root, "--new-only"],
         ]
+        counted = ""
         for cmd in steps:
             r = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
             for ln in (r.stdout or "").splitlines():
                 print(f"{Path(cmd[1]).stem}: {ln}", flush=True)
             if r.returncode not in OK_CODES:
                 return r.returncode
+            if Path(cmd[1]).stem == "rank":
+                counted = r.stdout or ""
         manifest = M.load(args)
         # Stamped after the search, so papers found today still satisfy found_date >= refreshed.
         manifest["refreshed"] = M.today()
         M.save(args, manifest)
-        # Count on rank.py's own predicate -- its previous `refreshed`, and its
-        # candidate states -- so the number describes the file the scout opens.
-        new = [p for p in M.papers_in(manifest, "found", "selected", "rejected")
-               if not prev or (p.get("found_date") or "") >= prev]
-        print(f"refresh: {len(new)} new candidates in candidates_titles.md; "
+        # rank.py's candidates= is its own count after every filter and the --top cap,
+        # so it is what the file holds. Recompute only if that line is gone.
+        m = re.search(r"\bcandidates=(\d+)", counted)
+        if m:
+            n = int(m.group(1))
+        else:
+            n = len([p for p in M.papers_in(manifest, "found", "selected", "rejected")
+                     if not prev or (p.get("found_date") or "") >= prev])
+        print(f"refresh: {n} new candidates in candidates_titles.md; "
               "run the scout TRIAGE then SELECT, then pipeline.py", flush=True)
-        return M.EXIT_OK if new else M.EXIT_NOTHING
+        return M.EXIT_OK if n else M.EXIT_NOTHING
 
     scripts = {step: here / f"{step}.py" for step in STEPS}
     missing = [str(p) for p in scripts.values() if not p.is_file()]

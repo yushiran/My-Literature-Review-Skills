@@ -220,7 +220,7 @@ def cookie_opener():
     return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
 
-# Twin of fetch.py's PROXY_LOGIN_RE; keep the two patterns in step.
+# The one copy of this pattern; fetch.py's download() uses it too.
 PROXY_LOGIN = re.compile(r"^https?://login\.[^/]*\.oclc\.org/|/login\?(?:qurl|url)=", re.I)
 
 

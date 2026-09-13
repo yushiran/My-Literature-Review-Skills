@@ -45,8 +45,8 @@ for _h in ("api.wiley.com", "api.elsevier.com", "www.ebi.ac.uk", "onlinelibrary.
            "ieeexplore.ieee.org", "www.sciencedirect.com", "link.springer.com"):
     HOST_LIMITS[_h], HOST_PAUSE[_h] = 1, 1.5
 # EZproxy answers 200 with its login page when the session cookie is gone, so the
-# only signal is the URL we ended up at.
-PROXY_LOGIN_RE = re.compile(r"^https?://login\.[^/]*\.oclc\.org/|/login\?(?:qurl|url)=", re.I)
+# only signal is the URL we ended up at. A.PROXY_LOGIN is the one copy of the pattern.
+# old: PROXY_LOGIN_RE = re.compile(r"^https?://login\.[^/]*\.oclc\.org/|/login\?(?:qurl|url)=", re.I)
 CREDENTIALED_VIA = ("ezproxy", "wiley-tdm", "elsevier-api")
 PREPLACE_STATES = ("selected", "pdf", "no-pdf", "failed")
 SAVE_EVERY = 5
@@ -184,7 +184,8 @@ def download(url, timeout, dest, headers=None):
     done = False
     try:
         with os.fdopen(fd, "wb") as out, open_url(url, timeout, headers) as r:
-            if PROXY_LOGIN_RE.search(r.geturl() or ""):
+            # old: if PROXY_LOGIN_RE.search(r.geturl() or ""):
+            if A.PROXY_LOGIN.search(r.geturl() or ""):
                 raise SessionExpired("proxy session expired, re-export the cookie jar")
             head = r.read(CHUNK)
             kind = body_kind(head)
@@ -353,7 +354,7 @@ def main():
 
     # Before the manifest, so this neither needs nor creates a library.
     if args.verify_session:
-        alive = A.session_alive(final_url)
+        alive = A.session_alive(lambda u: final_url(u, args.timeout))
         print(f"session: {'unconfigured' if alive is None else 'alive' if alive else 'stale'}")
         return M.EXIT_NOTHING if alive is None else (M.EXIT_OK if alive else M.EXIT_NETWORK)
 
@@ -396,7 +397,7 @@ def main():
     # One check for the whole run instead of one failed request per paper. Costs
     # nothing with no proxy configured, and nothing when there is nothing to fetch.
     stale_session = False
-    if todo and A.session_alive(final_url) is False:
+    if todo and A.session_alive(lambda u: final_url(u, args.timeout)) is False:
         M.log("fetch: the institutional proxy session is stale; skipping that route for this run.\n"
               "       Re-export the cookie jar from a signed-in tab (see references/institutional-access.md),\n"
               "       then re-run with --retry-no-pdf.")
