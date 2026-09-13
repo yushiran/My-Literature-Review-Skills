@@ -681,7 +681,9 @@ def main():
         print(f"saturation: new={new} of returned={returned} ({100 * frac:.1f}%), "
               f"{already} hits match already-rejected titles", flush=True)
         # old: if total_before and frac < 0.05:   # returned==0 gives frac 1.0, so it cannot fire
-        if frac < 0.05:
+        # old: if frac < 0.05:
+        # Inclusive: 1 new of 20 returned is exactly 5%, i.e. 95% of the round already known.
+        if frac <= 0.05:
             print("saturation: below 5%, this query axis is saturated; try seeds or snowball instead", flush=True)
 
     if openalex_error and counts["openalex"] == 0:
