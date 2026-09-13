@@ -38,6 +38,8 @@ OPENALEX_SELECT = ",".join([
     "id", "doi", "ids", "title", "publication_year", "cited_by_count",
     "authorships", "primary_location", "best_oa_location", "locations",
     "abstract_inverted_index", "relevance_score",
+    # old: referenced_works not selected; added so Task 6's snowball.py can read it
+    "referenced_works",
 ])
 S2_FIELDS = "title,abstract,year,venue,citationCount,externalIds,openAccessPdf,publicationDate,authors"
 ATOM = "{http://www.w3.org/2005/Atom}"
@@ -221,6 +223,34 @@ def search_openalex(query, since, limit):
         out.extend(openalex_record(w) for w in results)
         cursor = (data.get("meta") or {}).get("next_cursor")
     return out[:limit]
+
+
+def lookup_seed(spec):
+    """Resolve 'doi:…', 'arxiv:…' or a title to one OpenAlex record, or None."""
+    spec = spec.strip()
+    base = "https://api.openalex.org/works"
+    sel = {"select": OPENALEX_SELECT, "mailto": MAILTO}
+    with M.host_gate("api.openalex.org", 0.1):
+        if spec.lower().startswith("doi:"):
+            doi = M.norm_doi(spec[4:])
+            w = get_json_retry(f"{base}/https://doi.org/{doi}?{urllib.parse.urlencode(sel)}", name="openalex")
+            return openalex_record(w) if w.get("id") else None
+        if spec.lower().startswith("arxiv:"):
+            aid = M.norm_arxiv(spec[6:])
+            filt = {"filter": f"locations.landing_page_url:https://arxiv.org/abs/{aid}", "per-page": 1, **sel}
+            data = get_json_retry(f"{base}?{urllib.parse.urlencode(filt)}", name="openalex")
+            hits = data.get("results") or []
+            return openalex_record(hits[0]) if hits else None
+        filt = {"filter": f"title.search:{spec}", "per-page": 5, "sort": "cited_by_count:desc", **sel}
+        data = get_json_retry(f"{base}?{urllib.parse.urlencode(filt)}", name="openalex")
+    hits = [openalex_record(w) for w in data.get("results") or []]
+    exact = [h for h in hits if M.fuzzy_title(h["title"]) == M.fuzzy_title(spec)]
+    if exact:
+        return exact[0]
+    if hits:
+        M.log(f"seed: no exact title match for {spec!r}; taking the most cited hit {hits[0]['title']!r}")
+        return hits[0]
+    return None
 
 
 # ---------------------------------------------------------------- semantic scholar
@@ -467,7 +497,10 @@ def merge(manifest, recs, via="query"):
 
 def main():
     parser = M.base_parser("Search OpenAlex, Semantic Scholar and arXiv into manifest.json (status found).")
-    parser.add_argument("--query", action="append", required=True, help="search query (repeatable)")
+    # old: parser.add_argument("--query", action="append", required=True, help="search query (repeatable)")
+    parser.add_argument("--query", action="append", default=[], help="search query (repeatable)")
+    parser.add_argument("--seed", action="append", default=[],
+                        help="canonical paper to include regardless of --since: a title, doi:<doi> or arxiv:<id> (repeatable)")
     parser.add_argument("--since", type=int, default=_dt.date.today().year - 2,
                         help="earliest publication year (default: current year - 2)")
     parser.add_argument("--limit", type=int, default=100, help="max hits per query per source (default 100)")
@@ -492,8 +525,9 @@ def main():
         args.arxiv = "off"
 
     queries = [q.strip() for q in args.query if q.strip()]
-    if not queries:
-        M.log("search.py: at least one non-empty --query is required")
+    # old: if not queries:
+    if not queries and not args.seed:
+        M.log("search.py: at least one non-empty --query or --seed is required")
         sys.exit(M.EXIT_USAGE)
     manifest = M.load(args)
 
@@ -554,6 +588,29 @@ def main():
                 M.log(f"arxiv: skipped for {q!r}, {e}")
 
     new = merge(manifest, recs)
+
+    # Seeds: canonical papers named in the brief, force-selected regardless of --since.
+    seeded = 0
+    for spec in args.seed:
+        try:
+            r = lookup_seed(spec)
+        except (SourceDown, RateLimited) as e:
+            M.log(f"seed: {spec!r} lookup failed, {e}")
+            continue
+        if not r:
+            M.log(f"seed: {spec!r} not found on OpenAlex")
+            continue
+        before = set(manifest["papers"])
+        merge(manifest, [r], via="seed")
+        pid = next(iter(set(manifest["papers"]) - before), None) or next(
+            (p["id"] for p in manifest["papers"].values() if p.get("openalex") == r["openalex"]), None)
+        p = manifest["papers"][pid]
+        if p["status"] in ("found", "rejected"):
+            p["status"], p["why"] = "selected", "seed: named in the brief"
+        seeded += 1
+        if spec not in manifest.setdefault("seeds", []):
+            manifest["seeds"].append(spec)
+
     # old: filled = arxiv_backfill(manifest) if not args.no_arxiv else 0
     filled = arxiv_backfill(manifest) if args.arxiv != "off" else 0
     M.log(f"arxiv backfill: {filled} abstracts")
@@ -564,8 +621,9 @@ def main():
     M.save(args, manifest)
 
     s2_summary = "skipped" if (s2_skipped and counts["s2"] == 0) else str(counts["s2"])
+    # old: print(f"found={len(manifest['papers'])} new={new} openalex={counts['openalex']} " f"s2={s2_summary} arxiv={counts['arxiv']}", flush=True)
     print(f"found={len(manifest['papers'])} new={new} openalex={counts['openalex']} "
-          f"s2={s2_summary} arxiv={counts['arxiv']}", flush=True)
+          f"s2={s2_summary} arxiv={counts['arxiv']} seeds={seeded}", flush=True)
 
     if openalex_error and counts["openalex"] == 0:
         M.log(f"search.py: OpenAlex never answered ({openalex_error}); results from other sources were saved")
@@ -573,7 +631,8 @@ def main():
     if openalex_error:
         M.log(f"search.py: OpenAlex failed part-way ({openalex_error}); partial results were saved")
         sys.exit(M.EXIT_NETWORK)
-    if not recs:
+    # old: if not recs:
+    if not recs and not seeded:
         M.log("search.py: no source returned anything")
         sys.exit(M.EXIT_NOTHING)
     sys.exit(M.EXIT_OK)
