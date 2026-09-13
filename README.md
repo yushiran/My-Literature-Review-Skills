@@ -11,10 +11,15 @@ references/<topic>/
   md/<id>/<id>.md   MinerU Markdown, images/ beside it
 ```
 
-Search (OpenAlex, Semantic Scholar, arXiv) → rank by venue tier, citations
-and recency → a sonnet scout picks the relevant ones → open-access PDFs are downloaded →
-MinerU converts them to Markdown with figures → `INDEX.md` is generated → an
-opus librarian writes the reading guide at the top.
+Search + seeds → rank by venue tier, citations and recency → a sonnet scout
+triages the titles, then selects from the abstracts that survive → one hop on
+the citation graph picks up the canon behind them and the newest work citing
+them → open-access PDFs are downloaded → MinerU converts them to Markdown with
+figures → `INDEX.md` is generated → an opus librarian writes the reading guide
+at the top. OpenAlex carries the search; arXiv is used only when OpenAlex comes
+back thin, and Semantic Scholar only when asked for. Later,
+`pipeline.py --refresh` re-runs the stored queries and reports only what is
+new.
 
 Scripts do everything deterministic and cost no tokens; the two agents read
 abstracts only.
@@ -30,9 +35,16 @@ claude plugin install literature-review@yushiran-research
 `npm install -g mineru-open-api`; conversion with figures needs a token from
 https://mineru.net/apiManage/token (`mineru-open-api auth`). Papers with an
 arXiv id or an open-access link are converted by URL, fetched by the MinerU
-server itself; the local PDF is uploaded only when no URL exists. Semantic Scholar
-works without a key but is rate-limited; a free key from
-https://www.semanticscholar.org/product/api#api-key-form goes in `S2_API_KEY`.
+server itself; the local PDF is uploaded only when no URL exists.
+
+OpenAlex allows 1000 requests a day unauthenticated and 10000 with a free key
+from https://openalex.org, which is the difference between one library a day
+and a tool you can keep using. Put the key in `~/.config/litrev/access.env` as
+`OPENALEX_API_KEY=…` and `chmod 600` the file; the scripts read it from there,
+so nothing needs exporting. Semantic Scholar is off unless `--s2` is passed,
+and its free key from
+https://www.semanticscholar.org/product/api#api-key-form goes in the same file
+as `S2_API_KEY`.
 
 ## Use
 
