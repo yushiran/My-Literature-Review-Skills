@@ -15,7 +15,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import manifest as M  # noqa: E402
 
-PAST_SELECTION = ("pdf", "no-pdf", "md", "failed")
+# PAST_SELECTION = ("pdf", "no-pdf", "md", "failed")     # old: a re-run demoted unfetched selected papers
+PAST_SELECTION = ("selected", "pdf", "no-pdf", "md", "failed")
 CANDIDATE_LINE = re.compile(r"^## \d+\. (\S+)\s*$")
 
 
@@ -52,6 +53,7 @@ def main() -> int:
     parser = M.base_parser("Apply selected.json: mark selected, reject the other candidates.")
     parser.add_argument("--file", required=True, help="selected.json: array of {id, why}")
     parser.add_argument("--target", type=int, default=30, help="expected batch size, warn if exceeded (default 30)")
+    parser.add_argument("--triage", help="triage.json from the scout TRIAGE task; its drop list is rejected too")
     args = parser.parse_args()
 
     sel_path = Path(args.file)
@@ -80,6 +82,8 @@ def main() -> int:
     for pid, why in selection:
         p = papers[pid]
         if p.get("status") in PAST_SELECTION:
+            if p.get("status") == "selected" and why:
+                p["why"] = why
             M.log(f"select: {pid} already {p['status']}, left alone")
             continue
         p["status"] = "selected"
@@ -89,11 +93,19 @@ def main() -> int:
 
     cand_path = M.topic_dir(args) / "candidates.md"
     cands = candidate_ids(cand_path)
+    drop = set()
+    if args.triage:
+        try:
+            drop = set(json.loads(Path(args.triage).read_text()).get("drop") or [])
+        except (OSError, json.JSONDecodeError, AttributeError) as e:
+            M.log(f"select: cannot read {args.triage}: {e}")
+            return M.EXIT_USAGE
     if not cands:
         M.log(f"select: no candidates found in {cand_path}, rejecting nothing")
     n_rejected = 0
     for p in M.papers_in(manifest, "found"):
-        if p["id"] in cands and p["id"] not in selected_ids:
+        # if p["id"] in cands and p["id"] not in selected_ids:     # old: triage drop list wasn't rejected
+        if (p["id"] in cands or p["id"] in drop) and p["id"] not in selected_ids:
             p["status"] = "rejected"
             n_rejected += 1
 
