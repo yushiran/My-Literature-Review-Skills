@@ -187,6 +187,12 @@ def norm_arxiv(aid) -> str:
     return m.group(1) if m else aid.strip().lower()
 
 
+def as_list(v) -> list:
+    """A hand-edited list field, for iterating. A bare string is the one likely
+    malformation, and iterating it yields one item per character."""
+    return v if isinstance(v, list) else ([v] if isinstance(v, str) and v else [])
+
+
 def today() -> str:
     return _dt.date.today().isoformat()
 

@@ -6,10 +6,11 @@
 
 Each step is a subprocess of the same interpreter. Exit 4 from fetch or
 convert means nothing was waiting and is not an error. Exit 3 from convert
-(MinerU token) stops the pipeline and propagates. Exit 2 from fetch means some
-papers need a credential refreshed; the papers that did arrive still convert and
-index, and the 2 is returned at the end so the caller knows to refresh and
-re-run. Any other non-zero exit stops and propagates.
+(MinerU token) stops the pipeline and propagates. Exit 2 from fetch means a
+network or source was unavailable, which is either a dead connection or a stale
+credential; fetch says which. The papers that did arrive still convert and index,
+and the 2 is returned at the end so the caller knows to re-run. Any other non-zero
+exit stops and propagates.
 --refresh is the other mode: re-run the stored queries since the last refresh,
 snowball forward, rank only what is new, then stop for the scout. It does not
 fetch and does not convert.
@@ -137,10 +138,11 @@ def main() -> int:
             M.log("pipeline: stopped, MinerU token missing or rejected (see convert.py above)")
             return M.EXIT_TOKEN
         if step == "fetch" and r.returncode == M.EXIT_NETWORK:
-            # A credential expired part-way. The papers already downloaded are
-            # fine, so convert and index them; the rest stay `selected` for a
-            # re-run once the credential is refreshed.
-            M.log("pipeline: fetch needs a credential refreshed; converting what arrived")
+            # Exit 2 means a stale credential OR a dead network, and fetch has already
+            # printed which. The papers that did arrive are fine, so convert and index
+            # them; the rest stay `selected` for a re-run.
+            # old: M.log("pipeline: fetch needs a credential refreshed; converting what arrived")
+            M.log("pipeline: fetch could not finish (see its message above); converting what arrived")
             deferred = r.returncode
             continue
         M.log(f"pipeline: {step} exited {r.returncode}, stopping")
@@ -149,7 +151,8 @@ def main() -> int:
     print("pipeline: done", flush=True)
     print("states: " + state_counts(M.load(args)), flush=True)
     if deferred != M.EXIT_OK:
-        M.log("pipeline: refresh the credential and re-run to collect the papers left selected")
+        # old: M.log("pipeline: refresh the credential and re-run to collect the papers left selected")
+        M.log("pipeline: clear the cause above and re-run to collect the papers left selected")
     return deferred
 
 

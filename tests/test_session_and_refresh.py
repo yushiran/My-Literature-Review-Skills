@@ -157,6 +157,23 @@ def test_refresh_survives_an_unusable_date_in_the_manifest(args, monkeypatch):
     assert ran[0][ran[0].index("--since") + 1] == M.today()[:4]
 
 
+def test_a_fetch_network_exit_names_no_cause(args, monkeypatch, capsys):
+    """fetch returns 2 for a stale proxy session and for a dead network alike, and prints
+    the right message for each itself. The pipeline cannot tell them apart, so it must not try."""
+    def run(cmd, **kw):
+        code = M.EXIT_NETWORK if Path(cmd[1]).name == "fetch.py" else M.EXIT_OK
+        return type("R", (), {"returncode": code, "stdout": ""})()
+
+    monkeypatch.setattr(P.subprocess, "run", run)
+    sys.argv = ["pipeline.py", "--topic", args.topic, "--root", args.root]
+    assert P.main() == M.EXIT_NETWORK
+    cap = capsys.readouterr()
+    text = cap.out + cap.err
+    assert "credential" not in text, text      # a cause the exit code does not determine
+    assert "converting what arrived" in text
+    assert "left selected" in text
+
+
 def test_openalex_meta_sends_the_api_key_only_when_it_is_set(monkeypatch):
     seen = []
     monkeypatch.setattr(F, "get_json", lambda url, timeout, what: (seen.append(url), {})[1])

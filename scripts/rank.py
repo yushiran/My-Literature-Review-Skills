@@ -137,7 +137,8 @@ def write_titles(path: Path, manifest: dict, ranked: list) -> None:
     """Cheap first pass for the scout: title + venue/year/citations/via + a 30-word snippet,
     no abstract, no pdf line -- keeps the file small enough to always fit in one read."""
     lines = [f"# {manifest['topic']}: {len(ranked)} candidates, titles only (first {FIRST_WORDS} words of each abstract)"]
-    lines.extend(f"- {q}" for q in manifest.get("questions") or [])
+    # old: lines.extend(f"- {q}" for q in manifest.get("questions") or [])
+    lines.extend(f"- {q}" for q in M.as_list(manifest.get("questions")))   # hand-edited field: a bare string is one question, not N characters
     lines.append("")
     for rank, p in enumerate(ranked, 1):
         words = (p.get("abstract") or "").split()
@@ -149,7 +150,8 @@ def write_titles(path: Path, manifest: dict, ranked: list) -> None:
 
 def write_candidates(path: Path, manifest: dict, ranked: list, topic_dir: Path) -> None:
     lines = [f"# {manifest['topic']}: {len(ranked)} candidates listed"]
-    questions = manifest.get("questions") or []
+    # old: questions = manifest.get("questions") or []
+    questions = M.as_list(manifest.get("questions"))
     if questions:
         lines.append("Research questions:")
         lines.extend(f"- {q}" for q in questions)

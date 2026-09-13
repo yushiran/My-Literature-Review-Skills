@@ -44,6 +44,9 @@ HOST_PAUSE = {"arxiv.org": 1.0}  # seconds to hold the slot after a request
 for _h in ("api.wiley.com", "api.elsevier.com", "www.ebi.ac.uk", "onlinelibrary.wiley.com",
            "ieeexplore.ieee.org", "www.sciencedirect.com", "link.springer.com"):
     HOST_LIMITS[_h], HOST_PAUSE[_h] = 1, 1.5
+# One shared bucket for every proxied publisher: the credential behind it is the
+# whole institution's, so a burst there costs everyone their access, not just us.
+HOST_LIMITS["ezproxy"], HOST_PAUSE["ezproxy"] = 1, 1.5
 # EZproxy answers 200 with its login page when the session cookie is gone, so the
 # only signal is the URL we ended up at. A.PROXY_LOGIN is the one copy of the pattern.
 # old: PROXY_LOGIN_RE = re.compile(r"^https?://login\.[^/]*\.oclc\.org/|/login\?(?:qurl|url)=", re.I)
@@ -75,6 +78,12 @@ _host_sems, _host_lock = {}, threading.Lock()
 
 def host_key(url):
     host = (urllib.parse.urlparse(url).hostname or "").lower()
+    # access.py rewrote the publisher host into <host-with-dashes>.<proxy>, so the
+    # publisher's own key never matches. Undoing the rewrite is ambiguous, a real
+    # hostname may contain a dash, and one conservative bucket is what we want anyway.
+    proxy = (os.environ.get("LITREV_EZPROXY_HOST") or "").strip().lower()
+    if proxy and host.endswith("." + proxy):
+        return "ezproxy"
     return "arxiv.org" if host.endswith("arxiv.org") else host
 
 
@@ -318,8 +327,10 @@ def fetch_one(pid, paper, dest, timeout):
     # Europe PMC, publisher mining APIs, institutional proxy: only reached when the
     # paper has no open-access copy. Each is a no-op unless its credential is set.
     try:
+        # old: known_urls=(url, paper.get("pdf_url") or ""))   # `url` is unbound when
+        # the paper has no pdf_url, no arXiv id and no DOI, which lost the whole chain.
         extra = A.candidates(paper, landing, pmcid, lambda u: get_json(u, timeout, f"{pid} epmc"),
-                             known_urls=(url, paper.get("pdf_url") or ""))
+                             known_urls=tuple(tried))   # every URL attempt() actually tried
     except Exception as e:  # a broken route must never lose the paper
         extra, _ = [], reasons.append(f"access: {describe(e)}")
     for via, url, headers in extra:

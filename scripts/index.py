@@ -73,7 +73,8 @@ def files_cell(p: dict, tdir: Path) -> str:
 
 
 def questions_lines(manifest: dict) -> list:
-    qs = [q for q in (manifest.get("questions") or []) if q]
+    # old: qs = [q for q in (manifest.get("questions") or []) if q]
+    qs = [q for q in M.as_list(manifest.get("questions")) if q]   # hand-edited field: a bare string is one question, not N characters
     if not qs:
         return []
     return ["Research questions:"] + [f"{i}. {q}" for i, q in enumerate(qs, 1)] + [""]
