@@ -367,9 +367,9 @@ def main() -> int:
             M.save(args, fresh)
 
     def work(p):
-        # Try each source in order; stop at the first md (or a token rejection / abort).
-        attempts = sources_of(p, pdf_path(p), args.upload)
         pdf = pdf_path(p)
+        # Try each source in order; stop at the first md (or a token rejection / abort).
+        attempts = sources_of(p, pdf, args.upload)
         # Upload is known dead this run; an upload-only paper skips straight to local text.
         if (upload_dead.is_set() and args.upload_fallback == "local-text"
                 and all(m == "upload" for m, _ in attempts) and pdf.is_file()):
@@ -390,12 +390,13 @@ def main() -> int:
         if r["status"] == "failed":
             r["error"] = " | ".join(errors)[:MAX_ERROR]
             # MinerU could neither fetch it nor accept the upload; read it locally.
-            pdf = pdf_path(p)
-            if (any(e.startswith("upload:") and "Timeout" in e for e in errors)
-                    and not upload_dead.is_set()):
-                upload_dead.set()
-                M.log("convert: MinerU upload timed out once; reading the rest locally "
-                      "(--upload-fallback none to disable)")
+            # old: if (any(e.startswith("upload:") and "Timeout" in e for e in errors) and not upload_dead.is_set()):
+            with lock:  # check-then-act on upload_dead must be atomic across worker threads
+                if (any(e.startswith("upload:") and "Timeout" in e for e in errors)
+                        and not upload_dead.is_set()):
+                    upload_dead.set()
+                    M.log("convert: MinerU upload timed out once; reading the rest locally "
+                          "(--upload-fallback none to disable)")
             # old: if args.local_text_fallback and pdf.is_file():
             if (args.local_text_fallback
                     or (args.upload_fallback == "local-text" and upload_dead.is_set())) and pdf.is_file():
