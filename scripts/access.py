@@ -47,6 +47,7 @@ import re
 # old: import stat   (the permission guard moved to manifest.load_env)
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -226,6 +227,33 @@ def cookie_opener():
         print(f"access: {n} session cookie(s) given a {SESSION_TTL // 3600}h expiry so they are sent",
               flush=True)
     return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+
+# The one copy of this pattern; fetch.py's download() uses it too.
+PROXY_LOGIN = re.compile(r"^https?://login\.[^/]*\.oclc\.org/|/login\?(?:qurl|url)=", re.I)
+
+
+def session_alive(final_url_of):
+    """None when no proxy is configured; else whether one proxied GET stays off the login page.
+
+    final_url_of(url) must follow redirects and return the URL it ended on.
+    """
+    proxy = (os.environ.get("LITREV_EZPROXY_HOST") or "").strip()
+    if not proxy:
+        return None
+    verify = os.environ.get("LITREV_VERIFY_URL") or "https://onlinelibrary.wiley.com/"
+    try:
+        final = final_url_of(ezproxy_host_rewrite(verify, proxy))
+    except urllib.error.HTTPError as e:
+        # A response came back, so the session is not what failed. Publishers behind a
+        # CDN answer 403 to non-browser clients; only the login page means logged out.
+        final = e.geturl() or ""
+    except Exception as e:
+        # Unreachable is not the same as bounced, and the caller only gets a bool.
+        print(f"access: could not reach the proxy, treating the session as stale: {e}", flush=True)
+        return False
+    # old: return not PROXY_LOGIN.search(final or "")
+    return bool(final) and not PROXY_LOGIN.search(final)   # no endpoint is not evidence of a session
 
 
 # ---------------------------------------------------------------- europe pmc

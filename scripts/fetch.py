@@ -45,8 +45,8 @@ for _h in ("api.wiley.com", "api.elsevier.com", "www.ebi.ac.uk", "onlinelibrary.
            "ieeexplore.ieee.org", "www.sciencedirect.com", "link.springer.com"):
     HOST_LIMITS[_h], HOST_PAUSE[_h] = 1, 1.5
 # EZproxy answers 200 with its login page when the session cookie is gone, so the
-# only signal is the URL we ended up at.
-PROXY_LOGIN_RE = re.compile(r"^https?://login\.[^/]*\.oclc\.org/|/login\?(?:qurl|url)=", re.I)
+# only signal is the URL we ended up at. A.PROXY_LOGIN is the one copy of the pattern.
+# old: PROXY_LOGIN_RE = re.compile(r"^https?://login\.[^/]*\.oclc\.org/|/login\?(?:qurl|url)=", re.I)
 CREDENTIALED_VIA = ("ezproxy", "wiley-tdm", "elsevier-api")
 PREPLACE_STATES = ("selected", "pdf", "no-pdf", "failed")
 SAVE_EVERY = 5
@@ -106,6 +106,13 @@ def open_url(url, timeout, headers=None):
     if opener is not None:
         return opener.open(req, timeout=timeout)
     return urllib.request.urlopen(req, timeout=timeout)
+
+
+def final_url(url, timeout=20):
+    """The URL one GET ends on after redirects. A.session_alive() reads it, nothing else."""
+    opener = _opener() or urllib.request.build_opener()   # _opener() is cached, A.cookie_opener() is not
+    with opener.open(urllib.request.Request(url, headers={"User-Agent": USER_AGENT}), timeout=timeout) as r:
+        return r.geturl()
 
 
 def http_reason(code):
@@ -177,7 +184,8 @@ def download(url, timeout, dest, headers=None):
     done = False
     try:
         with os.fdopen(fd, "wb") as out, open_url(url, timeout, headers) as r:
-            if PROXY_LOGIN_RE.search(r.geturl() or ""):
+            # old: if PROXY_LOGIN_RE.search(r.geturl() or ""):
+            if A.PROXY_LOGIN.search(r.geturl() or ""):
                 raise SessionExpired("proxy session expired, re-export the cookie jar")
             head = r.read(CHUNK)
             kind = body_kind(head)
@@ -252,6 +260,10 @@ def openalex_meta(doi, timeout, what):
     q = urllib.parse.quote(doi, safe="/:")
     url = (f"https://api.openalex.org/works/doi:{q}"
            f"?select=best_oa_location,primary_location,ids&mailto={MAILTO}")
+    api_key = os.environ.get("OPENALEX_API_KEY")
+    if api_key:
+        # Runs once per paper, and the anonymous pool is 1000 requests a day against 10000.
+        url += "&api_key=" + urllib.parse.quote(api_key, safe="")
     data = get_json(url, timeout, what)
     oa = (data.get("best_oa_location") or {}).get("pdf_url") or ""
     landing = (data.get("primary_location") or {}).get("landing_page_url") or ""
@@ -337,10 +349,18 @@ def main():
     parser.add_argument("--retry-no-pdf", action="store_true",
                         help="also retry papers already marked no-pdf (use after configuring "
                              "institutional access; see access.py)")
+    parser.add_argument("--verify-session", action="store_true",
+                        help="check the institutional proxy session and exit")
     args = parser.parse_args()
     if args.jobs < 1 or args.timeout <= 0:
         M.log("fetch: --jobs must be >= 1 and --timeout > 0")
         return M.EXIT_USAGE
+
+    # Before the manifest, so this neither needs nor creates a library.
+    if args.verify_session:
+        alive = A.session_alive(lambda u: final_url(u, args.timeout))
+        print(f"session: {'unconfigured' if alive is None else 'alive' if alive else 'stale'}")
+        return M.EXIT_NOTHING if alive is None else (M.EXIT_OK if alive else M.EXIT_NETWORK)
 
     manifest = M.load(args)
     tdir = M.topic_dir(args)
@@ -378,6 +398,15 @@ def main():
     if n_pre:
         M.save(args, manifest)
     M.log(f"fetch: {len(todo)} selected paper(s), {args.jobs} job(s)")
+    # One check for the whole run instead of one failed request per paper. Costs
+    # nothing with no proxy configured, and nothing when there is nothing to fetch.
+    stale_session = False
+    if todo and A.session_alive(lambda u: final_url(u, args.timeout)) is False:
+        M.log("fetch: the institutional proxy session is stale; skipping that route for this run.\n"
+              "       Re-export the cookie jar from a signed-in tab (see references/institutional-access.md),\n"
+              "       then re-run with --retry-no-pdf.")
+        os.environ["LITREV_EZPROXY_HOST"] = ""     # A.candidates() reads it per paper
+        stale_session = True
     M.log(f"fetch: extra routes for paywalled papers: {A.configured()}")
 
     papers = manifest["papers"]
@@ -402,6 +431,9 @@ def main():
                 # Held back: decided once we know whether the network itself was down.
                 transient.append(r)
                 M.log(f"fetch: {r['id']}: unreachable ({r['error']})")
+            elif stale_session and "ezproxy:" not in r["error"]:
+                # The proxy route was off all run, so this no-pdf is unproven; leave it selected.
+                M.log(f"fetch: {r['id']}: left selected, the proxy route was off this run")
             else:
                 p["status"], p["error"] = "no-pdf", r["error"]
                 n_nopdf += 1
@@ -417,7 +449,8 @@ def main():
     pool.shutdown(wait=True)
 
     network_down = bool(todo) and transient and len(transient) == len(todo)
-    if not network_down:
+    # old: if not network_down:
+    if not network_down and not stale_session:   # unproven either way; leave them selected
         for r in transient:
             p = papers[r["id"]]
             p["status"], p["error"] = "no-pdf", r["error"]
@@ -426,7 +459,8 @@ def main():
 
     remaining = len(M.papers_in(manifest, "selected"))
     print(f"pdf={n_pdf} no-pdf={n_nopdf} pre-placed={n_pre} remaining_selected={remaining}")
-    if session_dead:
+    # old: if session_dead:
+    if session_dead or stale_session:
         M.log("fetch: the institutional proxy sent us to its login page. Re-export the cookie\n"
               "       jar from a freshly signed-in browser tab, then re-run with --retry-no-pdf.\n"
               f"       {remaining} paper(s) left selected; nothing was wrongly marked no-pdf.")
