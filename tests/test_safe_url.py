@@ -30,3 +30,15 @@ def test_the_key_never_reaches_the_exception_message(code, exc, monkeypatch):
     with pytest.raises(exc) as caught:
         S.get_json_retry(URL, name="openalex")
     assert FAKE not in str(caught.value)
+
+
+def test_the_key_never_reaches_the_unreachable_message(monkeypatch):
+    # urllib can raise a ValueError carrying the whole URL, and ValueError is in the catch tuple.
+    def boom(url, headers=None):
+        raise ValueError(f"unknown url type: {url}")
+
+    monkeypatch.setattr(S, "http_get", boom)
+    monkeypatch.setattr(S, "BACKOFF", ())
+    with pytest.raises(S.SourceDown) as caught:
+        S.get_json_retry(URL, name="openalex")
+    assert FAKE not in str(caught.value)

@@ -116,9 +116,12 @@ def get_json_retry(url, headers=None, name="source"):
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
             last = e
         if attempt < len(BACKOFF):
-            M.log(f"{name}: {last}; retry in {BACKOFF[attempt]}s")
+            # old: M.log(f"{name}: {last}; retry in {BACKOFF[attempt]}s")
+            # a ValueError from urllib can carry the whole URL, and ValueError is caught above
+            M.log(f"{name}: {safe_url(str(last))}; retry in {BACKOFF[attempt]}s")
             time.sleep(BACKOFF[attempt])
-    raise SourceDown(f"{name} unreachable: {last}")
+    # old: raise SourceDown(f"{name} unreachable: {last}")
+    raise SourceDown(f"{name} unreachable: {safe_url(str(last))}")
 
 
 # ---------------------------------------------------------------- helpers

@@ -28,8 +28,12 @@ STOPWORDS = {
     "into", "its", "as", "we", "our", "new", "novel",
 }
 ENV_FILE = "~/.config/litrev/access.env"
-SECRETS = ("OPENALEX_API_KEY", "S2_API_KEY", "WILEY_TDM_TOKEN", "ELSEVIER_API_KEY",
-           "ELSEVIER_INSTTOKEN", "LITREV_EZPROXY_HOST", "LITREV_COOKIES", "SPRINGER_API_KEY")
+# The keys load_env will take from the credential file; not all of them are secrets.
+# old: SECRETS = ("OPENALEX_API_KEY", "S2_API_KEY", "WILEY_TDM_TOKEN", "ELSEVIER_API_KEY",
+# old:            "ELSEVIER_INSTTOKEN", "LITREV_EZPROXY_HOST", "LITREV_COOKIES", "SPRINGER_API_KEY")
+SECRETS = ("OPENALEX_API_KEY", "S2_API_KEY", "MINERU_TOKEN", "WILEY_TDM_TOKEN", "ELSEVIER_API_KEY",
+           "ELSEVIER_INSTTOKEN", "LITREV_EZPROXY_HOST", "LITREV_COOKIES", "LITREV_VERIFY_URL",
+           "SPRINGER_API_KEY")
 
 
 def load_env(path=None):
@@ -40,17 +44,24 @@ def load_env(path=None):
     path = path or os.environ.get("LITREV_ENV_FILE") or os.path.expanduser(ENV_FILE)
     if not os.path.isfile(path):
         return
-    if os.stat(path).st_mode & (stat.S_IRGRP | stat.S_IROTH):
-        print(f"load_env: {path} is readable by others; chmod 600 it. Ignored.", flush=True)
-        return
+    # old: if os.stat(path).st_mode & (stat.S_IRGRP | stat.S_IROTH):
+    # old:     print(f"load_env: {path} is readable by others; chmod 600 it. Ignored.", flush=True)
+    # old:     return
     try:
+        # inside the try: the file can vanish between isfile() and stat()
+        if os.stat(path).st_mode & (stat.S_IRGRP | stat.S_IROTH):
+            log(f"load_env: {path} is readable by others; chmod 600 it. Ignored.")
+            return
         with open(path) as fh:
             for line in fh:
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 key, _, val = line.partition("=")
-                key, val = key.strip().removeprefix("export "), val.strip().strip("'\"")
+                # old: key, val = key.strip().removeprefix("export "), val.strip().strip("'\"")
+                key, val = key.strip().removeprefix("export "), val.strip()
+                # a trailing # is a comment only when the value is unquoted; quoted stays verbatim
+                val = val.strip("'\"") if val[:1] in ("'", '"') else re.sub(r"\s+#.*$", "", val)
                 if key in SECRETS and val and not os.environ.get(key):
                     os.environ[key] = val
     except OSError:
