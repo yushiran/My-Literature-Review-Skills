@@ -152,9 +152,10 @@ lets one search run its queries concurrently.
 OpenAlex meters by credit rather than by rate. One request costs one credit
 and a paginated query costs several, the allowance is 1000 a day
 unauthenticated and 10000 with a free `OPENALEX_API_KEY`, and it resets at
-midnight UTC. An exhausted allowance answers `429` with `"Insufficient
-budget"`, which no backoff can clear — see SKILL.md rule 6 for what to tell
-the user.
+midnight UTC. Every request carries `mailto` as well, which is what puts it in
+the polite pool; the key raises the allowance rather than replacing that. An
+exhausted allowance answers `429` with `"Insufficient budget"`, which no
+backoff can clear — see SKILL.md rule 6 for what to tell the user.
 
 ## Parallelism
 
