@@ -617,6 +617,9 @@ def main():
             except (SourceDown, ET.ParseError) as e:
                 M.log(f"arxiv: skipped for {q!r}, {e}")
 
+    # Saturation baseline: the library as it stood before this round's query merge.
+    total_before = len(manifest["papers"])
+    rejected_titles = {M.fuzzy_title(p["title"]) for p in M.papers_in(manifest, "rejected")}
     new = merge(manifest, recs)
 
     # Seeds: canonical papers named in the brief, force-selected regardless of --since.
@@ -653,12 +656,23 @@ def main():
         if q not in manifest["queries"]:
             manifest["queries"].append(q)
     manifest["since"] = args.since if manifest.get("since") is None else min(manifest["since"], args.since)
+    already = sum(1 for r in recs if M.fuzzy_title(r["title"]) in rejected_titles)
+    # new excludes seeds (the seed merge discards its return); queries is this round's list.
+    manifest.setdefault("rounds", []).append({
+        "date": M.today(), "kind": "search", "queries": queries, "new": new,
+        "new_titles_already_rejected": already, "total_before": total_before,
+    })
     M.save(args, manifest)
 
     s2_summary = "skipped" if (s2_skipped and counts["s2"] == 0) else str(counts["s2"])
     # old: print(f"found={len(manifest['papers'])} new={new} openalex={counts['openalex']} " f"s2={s2_summary} arxiv={counts['arxiv']}", flush=True)
     print(f"found={len(manifest['papers'])} new={new} openalex={counts['openalex']} "
           f"s2={s2_summary} arxiv={counts['arxiv']} seeds={seeded}", flush=True)
+    frac = new / total_before if total_before else 1.0
+    print(f"saturation: new={new} of total_before={total_before} ({100 * frac:.1f}%), "
+          f"{already} hits match already-rejected titles", flush=True)
+    if total_before and frac < 0.05:
+        print("saturation: below 5%, this query axis is saturated; try seeds or snowball instead", flush=True)
 
     if openalex_error and counts["openalex"] == 0:
         M.log(f"search.py: OpenAlex never answered ({openalex_error}); results from other sources were saved")
