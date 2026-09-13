@@ -43,15 +43,21 @@ import http.cookiejar
 import json
 import os
 import re
-import stat
+# old: import stat   (the permission guard moved to manifest.load_env)
+import sys
 import time
 import urllib.parse
 import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import manifest as M  # noqa: E402
 
 EPMC_SEARCH = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 ENV_FILE = os.environ.get("LITREV_ENV_FILE") or os.path.expanduser("~/.config/litrev/access.env")
-_SECRETS = ("WILEY_TDM_TOKEN", "ELSEVIER_API_KEY", "ELSEVIER_INSTTOKEN",
-            "LITREV_EZPROXY_HOST", "LITREV_COOKIES", "SPRINGER_API_KEY")
+# old: _SECRETS = ("WILEY_TDM_TOKEN", "ELSEVIER_API_KEY", "ELSEVIER_INSTTOKEN",
+# old:             "LITREV_EZPROXY_HOST", "LITREV_COOKIES", "SPRINGER_API_KEY")
+# M.SECRETS is now the single list, and it also carries OPENALEX_API_KEY / S2_API_KEY.
 
 
 def _load_env_file(path=ENV_FILE):
@@ -59,24 +65,25 @@ def _load_env_file(path=ENV_FILE):
 
     Refuses a world- or group-readable file: a publisher token is a credential.
     """
-    if not os.path.isfile(path):
-        return
-    mode = os.stat(path).st_mode
-    if mode & (stat.S_IRGRP | stat.S_IROTH):
-        print(f"access: {path} is readable by others; chmod 600 it. Ignored.", flush=True)
-        return
-    try:
-        with open(path) as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, val = line.partition("=")
-                key, val = key.strip().removeprefix("export "), val.strip().strip("'\"")
-                if key in _SECRETS and val and not os.environ.get(key):
-                    os.environ[key] = val
-    except OSError:
-        pass
+    # old: if not os.path.isfile(path):
+    # old:     return
+    # old: mode = os.stat(path).st_mode
+    # old: if mode & (stat.S_IRGRP | stat.S_IROTH):
+    # old:     print(f"access: {path} is readable by others; chmod 600 it. Ignored.", flush=True)
+    # old:     return
+    # old: try:
+    # old:     with open(path) as fh:
+    # old:         for line in fh:
+    # old:             line = line.strip()
+    # old:             if not line or line.startswith("#") or "=" not in line:
+    # old:                 continue
+    # old:             key, _, val = line.partition("=")
+    # old:             key, val = key.strip().removeprefix("export "), val.strip().strip("'\"")
+    # old:             if key in _SECRETS and val and not os.environ.get(key):
+    # old:                 os.environ[key] = val
+    # old: except OSError:
+    # old:     pass
+    M.load_env(path)   # search.py needs the same file, so the reader moved to manifest
 
 
 _load_env_file()

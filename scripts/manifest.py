@@ -11,6 +11,7 @@ import fcntl
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 import time
@@ -26,6 +27,34 @@ STOPWORDS = {
     "by", "from", "at", "is", "are", "using", "based", "towards", "toward",
     "into", "its", "as", "we", "our", "new", "novel",
 }
+ENV_FILE = "~/.config/litrev/access.env"
+SECRETS = ("OPENALEX_API_KEY", "S2_API_KEY", "WILEY_TDM_TOKEN", "ELSEVIER_API_KEY",
+           "ELSEVIER_INSTTOKEN", "LITREV_EZPROXY_HOST", "LITREV_COOKIES", "SPRINGER_API_KEY")
+
+
+def load_env(path=None):
+    """Populate os.environ from a KEY=value file, without overriding a real export.
+
+    Refuses a group- or world-readable file: an API key is a credential.
+    """
+    path = path or os.environ.get("LITREV_ENV_FILE") or os.path.expanduser(ENV_FILE)
+    if not os.path.isfile(path):
+        return
+    if os.stat(path).st_mode & (stat.S_IRGRP | stat.S_IROTH):
+        print(f"load_env: {path} is readable by others; chmod 600 it. Ignored.", flush=True)
+        return
+    try:
+        with open(path) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key, val = key.strip().removeprefix("export "), val.strip().strip("'\"")
+                if key in SECRETS and val and not os.environ.get(key):
+                    os.environ[key] = val
+    except OSError:
+        pass
 
 
 def base_parser(description: str) -> argparse.ArgumentParser:

@@ -525,6 +525,7 @@ def merge(manifest, recs, via="query"):
 # ---------------------------------------------------------------- main
 
 def main():
+    M.load_env()   # OPENALEX_API_KEY / S2_API_KEY from ~/.config/litrev/access.env
     parser = M.base_parser("Search OpenAlex, Semantic Scholar and arXiv into manifest.json (status found).")
     # old: parser.add_argument("--query", action="append", required=True, help="search query (repeatable)")
     parser.add_argument("--query", action="append", default=[], help="search query (repeatable)")
