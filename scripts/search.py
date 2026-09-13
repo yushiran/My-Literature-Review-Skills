@@ -471,10 +471,10 @@ def main():
     parser.add_argument("--since", type=int, default=_dt.date.today().year - 2,
                         help="earliest publication year (default: current year - 2)")
     parser.add_argument("--limit", type=int, default=100, help="max hits per query per source (default 100)")
-    # parser.add_argument("--no-s2", action="store_true", help="skip Semantic Scholar")   # old: S2 on by default, usually 429
+    # old: parser.add_argument("--no-s2", action="store_true", help="skip Semantic Scholar")
     parser.add_argument("--s2", action="store_true", help="also query Semantic Scholar (needs S2_API_KEY to be useful)")
     parser.add_argument("--no-s2", action="store_true", help=argparse.SUPPRESS)   # accepted, no-op
-    # parser.add_argument("--no-arxiv", action="store_true", help="skip arXiv")   # old
+    # old: parser.add_argument("--no-arxiv", action="store_true", help="skip arXiv")
     parser.add_argument("--arxiv", choices=("auto", "on", "off"), default="auto",
                         help="auto: OpenAlex indexes arXiv, so search it only when OpenAlex returns fewer than "
                              "20 hits for a query; abstracts are still backfilled from arXiv (default auto)")
@@ -540,11 +540,9 @@ def main():
                 s2_skipped = True
                 M.log(f"s2: skipped for the rest of the run, {e}")
 
-        # 3. arXiv: "on" always searches; "auto" only when OpenAlex is both thin (<20
-        # hits) and missing abstracts for this query -- arxiv_backfill covers the rest.
+        # 3. arXiv: "on" always searches; "auto" only when OpenAlex found fewer than 20 hits.
         # old: if not args.no_arxiv:
-        if args.arxiv == "on" or (args.arxiv == "auto" and len(oa_hits) < 20
-                                   and not any(h.get("abstract") for h in oa_hits)):
+        if args.arxiv == "on" or (args.arxiv == "auto" and len(oa_hits) < 20):
             # old: the manual "if q is not queries[0]: time.sleep(3)" pause moved into
             # search_arxiv's own host_gate call, which paces across processes too.
             try:
