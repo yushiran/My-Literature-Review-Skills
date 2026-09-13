@@ -33,3 +33,11 @@ Rules:
 - No filler, no hype adjectives, no bullet lists of one word each. Short
   declarative sentences.
 - Do not restate the abstracts; the index already carries them.
+- If a previous guide is given as input alongside a dump holding only the
+  papers added since, write a **delta**: keep the previous taxonomy, add each
+  new paper to its group with one sentence, extend the timeline, and revise
+  only the gaps that the new papers close or open. Do not rewrite unchanged
+  text.
+- Papers marked `[unread: …]` or `[text-only]` in the dump were selected but
+  not read in full; say so where their contribution is load-bearing, and never
+  present an abstract's claim from such a paper as a verified result.

@@ -19,7 +19,8 @@ once; it is the data contract every script and agent follows.
    writes the reading guide. Nothing else calls a model.
 3. **Never traverse the library.** A question about the references starts at
    `references/<topic>/INDEX.md`. Grep it, pick ids, open only those
-   `md/<id>/<id>.md`.
+   `md/<id>/<id>.md`. `INDEX.md` lists the papers that were selected but never
+   read; do not cite their content as verified.
 4. **MinerU needs a token, and the token is the user's to give.** If
    `convert.py` exits 3, stop and tell the user:
    > MinerU 需要 API token。在 https://mineru.net/apiManage/token 生成一个，然后
@@ -38,12 +39,26 @@ once; it is the data contract every script and agent follows.
    batch. If `fetch.py` exits 2 saying the proxy sent us to its login page, the jar
    is stale: ask for a fresh export, then `fetch.py --retry-no-pdf`.
 
-6. **Semantic Scholar is optional.** Without a key it shares a public pool and
-   often answers 429; `search.py` backs off, then skips it and says so.
-   OpenAlex alone is enough. Mention the key only when the user asks why S2
-   was skipped or asks for more coverage: register at
-   https://www.semanticscholar.org/product/api#api-key-form and set
-   `S2_API_KEY`.
+6. **OpenAlex meters by credit, and the free key raises the ceiling tenfold.**
+   One request costs one credit; a paginated query costs several. Measured
+   2026-09-13: **1000 requests a day unauthenticated, 10000 with a free key**,
+   resetting at midnight UTC. Exhausting it returns `429` with
+   `"Insufficient budget"`, and no amount of backing off helps until the reset.
+   Building six libraries in a day exhausts the unauthenticated allowance, so
+   tell the user once, at the first `429`:
+   > OpenAlex 的免费额度用完了(未认证每天 1000 次)。去 https://openalex.org
+   > 注册一个免费账号拿 API key,把它写进 `~/.config/litrev/access.env`:
+   > `OPENALEX_API_KEY=<key>`,然后 `chmod 600` 那个文件。额度会涨到每天
+   > 10000 次,立刻生效,不用等重置。
+
+   The scripts read that file themselves; nothing needs exporting. Never read
+   the file back or echo a key, and warn the user that a key pasted into chat
+   is in the transcript.
+
+   Semantic Scholar is optional and secondary. Without a key it shares a public
+   pool and usually answers 429; `--s2` is opt-in for that reason. A free key
+   from https://www.semanticscholar.org/product/api#api-key-form goes in the
+   same file as `S2_API_KEY`.
 
 ## Build
 
@@ -65,81 +80,96 @@ how they differ.
 
 ### 0. Brief — one confirmation with the user
 
-Ask `scout` (model sonnet) for the brief: two or three research questions,
-four to eight search queries, and the `since` year (default: two years back).
-Show the brief to the user in one message and wait for a yes. This is the only
-approval in the build.
+Ask `scout` for: research questions, queries, `since`, and `seeds` (the
+canonical papers the questions presuppose). Show it; wait for a yes.
 
-### 1. Search and rank — scripts, seconds
+### 1. Search, seeds, rank — scripts
 
 ```sh
-uv run scripts/search.py --topic <slug> --since <year> --query "…" --query "…"
-uv run scripts/rank.py   --topic <slug> --top 100
+uv run scripts/search.py --topic <slug> --since <year> --query "…" … --seed "…" …
+uv run scripts/rank.py   --topic <slug> --top 120
 ```
 
-`rank.py` writes `candidates.md`: the top 100 by venue tier × citations per
-year × recency, each with its abstract. Venue tiers are in
-[references/venues.yaml](references/venues.yaml); the user may edit it.
+Seeds enter as `selected`. Read the `saturation:` line: it is the share of
+what the round returned that was new, so 5 % or less means the library already
+held almost all of it and this query axis is exhausted; go to snowball rather
+than adding queries.
+arXiv is searched only when OpenAlex returns fewer than 20 hits for a query
+(`--arxiv on` to force); Semantic Scholar needs `--s2` and a key.
 
-### 2. Select — scout, the one costly call
+Venue tiers are in [references/venues.yaml](references/venues.yaml); the user
+may edit it.
 
-Give `scout` the brief and `candidates.md`, together with the rejection
-criteria for this topic; it returns `selected.json` with as many ids as earn a
-place and one line of `why` each. Then:
+### 2. Triage — scout, cheap
+
+Give `scout` the brief and `candidates_titles.md`; it writes `triage.json`.
 
 ```sh
-uv run scripts/select.py --topic <slug> --file references/<slug>/selected.json --target <n selected>
+uv run scripts/rank.py --topic <slug> --only references/<slug>/triage.json
 ```
 
-### 3. Fetch, convert, index — scripts, in the background
+### 3. Select — scout, the costly call, now over 20–40 abstracts not 100
+
+```sh
+uv run scripts/select.py --topic <slug> --file references/<slug>/selected.json --triage references/<slug>/triage.json --target <n>
+```
+
+If `selected.json` has not appeared 20 minutes after launching the scout,
+look for `selected.partial.json`; relaunch and tell it to continue from there.
+
+### 4. Snowball — scripts, then steps 1–3 again on the new candidates only
+
+```sh
+uv run scripts/snowball.py --topic <slug> --since <year>
+uv run scripts/rank.py --topic <slug>
+```
+
+One hop back finds the canon, one hop forward the newest followers. Ranking
+here covers the whole library, not just the new papers: `--new-only` needs a
+`refreshed` date, and only `pipeline.py --refresh` ever sets one. Repeat
+triage and select on `candidates_titles.md`; stop when snowball's `new` is
+under 5 % of the library.
+
+### 5. Fetch, convert, index — scripts, in the background
 
 ```sh
 uv run scripts/pipeline.py --topic <slug> --jobs 4
 ```
 
-Run it in the background (`run_in_background`) and keep going. It downloads
-the open-access PDFs (paywalled ones become `no-pdf` and keep their abstract in
-the index), converts each paper with `mineru-open-api extract` in four parallel
-processes, and rebuilds `INDEX.md`. Re-running is safe; it only touches papers
-whose state moved.
+A stale proxy session is detected once at the start and skipped for the run;
+the cookie procedure is in references/institutional-access.md. A MinerU
+upload timeout switches the remaining upload-only papers to local text
+automatically (`--upload-fallback none` to disable).
 
-Conversion is by URL whenever possible: a paper with an arXiv id or an
-open-access `pdf_url` is passed to the CLI as that URL, so the MinerU server
-fetches it itself and nothing is uploaded from this machine (uploads to the
-MinerU OSS bucket time out from many HPC and campus networks, even for a 2 MB
-file). The local `pdf/<id>.pdf` is uploaded only as a fallback, or always with
-`convert.py --upload`. If `failed` entries show `upload: ... Client.Timeout`,
-that is the network, not the token; re-run `convert.py --retry-failed`.
-
-A PDF the user drops into `pdf/<id>.pdf` by hand is picked up on the next run.
-
-A paper obtained through a credential must be uploaded, since MinerU cannot
-authenticate, and on some networks that upload never completes — see the
-conversion section of [references/institutional-access.md](references/institutional-access.md)
-for the measurements. When `failed` entries are all `upload:` errors, look for an
-arXiv version by title first, then run `convert.py --local-text-fallback` to read
-the rest locally as text.
-
-### 4. Reading guide — librarian, one call
-
-When the pipeline reports nothing left to do:
+### 6. Reading guide — librarian
 
 ```sh
 uv run scripts/index.py --topic <slug> --dump-abstracts > /tmp/abstracts.md
 ```
 
-Give that to `librarian` (model opus). It writes `references/<slug>/guide.md`:
-a taxonomy of the collected work, the timeline, ten must-reads with one
-sentence each, and the gaps. Then fold it in:
+The dump marks `[unread: …]` and `[text-only]` papers; the guide must too.
+Give it to `librarian`, then fold the result in:
 
 ```sh
 uv run scripts/index.py --topic <slug> --guide references/<slug>/guide.md
 ```
 
-### 5. Report
+### 7. Report
 
-Tell the user: how many found, selected, converted, `no-pdf`, `failed`; the
-path of `INDEX.md`; and whether S2 was skipped.
+Found, selected, converted, unread (paywalled), failed; `INDEX.md` path;
+which steps arXiv/S2 skipped; the `found_via` split (query / seed / snowball).
+
+## Refresh — a living review
+
+```sh
+uv run scripts/pipeline.py --topic <slug> --refresh
+```
+
+Re-runs the stored queries since the last refresh, snowballs forward from
+everything past selection, ranks only the new ones, and stops for triage +
+select.
+Then `pipeline.py` as usual and `index.py --dump-abstracts --new-only` for the
+librarian, giving it the previous `guide.md` so it writes a delta.
 
 ## Answer
 
@@ -155,7 +185,8 @@ When the user asks something about a topic that has a library:
 
 ```
 references/<topic>/
-  INDEX.md   manifest.json   candidates.md   selected.json   guide.md
+  INDEX.md   manifest.json   candidates.md   candidates_titles.md
+  triage.json   selected.json   snowball.md   guide.md
   pdf/<id>.pdf
   md/<id>/<id>.md  +  md/<id>/images/
 ```
