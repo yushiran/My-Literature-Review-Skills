@@ -38,6 +38,8 @@ def test_only_restricts_candidates_and_snowball_bonus_orders(args):
     c = (d / "candidates.md").read_text()
     assert "2025-a-p1" not in c and "2025-a-p0" in c and "2025-a-p2" in c
     assert c.index("2025-a-p0") < c.index("2025-a-p2")
+    t = (d / "candidates_titles.md").read_text()
+    assert "2025-a-p1" in t   # --only restricts candidates.md only; the titles file stays unfiltered
 
 
 def test_new_only_uses_refreshed_date(args):
