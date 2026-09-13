@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import manifest as M  # noqa: E402
 
 LISTED_STATES = ("selected", "pdf", "no-pdf", "md", "failed")
+UNREAD_STATES = ("selected", "no-pdf", "failed")  # statuses whose guide entry rests on the abstract only
 GUIDE_OPEN, GUIDE_CLOSE = "<!-- guide -->", "<!-- /guide -->"
 NO_GUIDE = "_No reading guide yet._"
 GUIDE_BLOCK = re.compile(re.escape(GUIDE_OPEN) + r"\n(.*?)\n?" + re.escape(GUIDE_CLOSE), re.S)
@@ -75,6 +76,34 @@ def questions_lines(manifest: dict) -> list:
     return ["Research questions:"] + [f"{i}. {q}" for i, q in enumerate(qs, 1)] + [""]
 
 
+def unread_lines(papers: list) -> list:
+    """Header lines naming which listed papers the guide can only draw from an abstract."""
+    unread = [p for p in papers if p.get("status") in UNREAD_STATES]
+    textonly = [p["id"] for p in papers if p.get("conversion") == "local-text"]
+    lines = []
+    if unread:
+        lines.append(f"Selected but unread ({len(unread)}): the guide below rests on their abstracts only.")
+        for p in unread:
+            # .get with fallback: an UNREAD_STATES entry missing here must not KeyError and lose INDEX.md
+            reason = p.get("error") or {"selected": "not fetched yet", "no-pdf": "no open-access copy",
+                                        "failed": "conversion failed"}.get(p["status"], "reason unknown")
+            lines.append(f"- {p['id']} — {reason}")
+        lines.append("")
+    if textonly:
+        lines.append("Text only (no figures or tables): " + ", ".join(textonly))
+        lines.append("")
+    return lines
+
+
+def marker(p: dict) -> str:
+    """Bracket tag for a dump entry: unread status takes priority over text-only."""
+    if p.get("status") in UNREAD_STATES:
+        return f" [unread: {p['status']}]"
+    if p.get("conversion") == "local-text":
+        return " [text-only]"
+    return ""
+
+
 def render_index(manifest: dict, papers: list, guide: str, tdir: Path) -> str:
     counts = {s: sum(1 for p in papers if p.get("status") == s) for s in LISTED_STATES}
     lines = [f"# {manifest['topic']} — literature index"]
@@ -84,6 +113,7 @@ def render_index(manifest: dict, papers: list, guide: str, tdir: Path) -> str:
         f"{counts['failed']} failed, {counts['selected']} pending."
     )
     lines.append("")
+    lines.extend(unread_lines(papers))
     lines.extend(questions_lines(manifest))
     lines.extend([GUIDE_OPEN, guide or NO_GUIDE, GUIDE_CLOSE, ""])
 
@@ -135,7 +165,8 @@ def render_dump(manifest: dict, papers: list) -> str:
     lines = questions_lines(manifest)
     for p in papers:
         year = p.get("year") if p.get("year") is not None else "n.d."
-        lines.append(f"### {p['id']}")
+        # old: lines.append(f"### {p['id']}")
+        lines.append(f"### {p['id']}{marker(p)}")
         lines.append(p.get("title") or "(no title)")
         lines.append(f"{p.get('venue') or '(no venue)'} · {year} · {int(p.get('citations') or 0)} citations")
         lines.append(p.get("abstract") or "(no abstract)")
@@ -156,6 +187,8 @@ def main() -> int:
     parser.add_argument("--guide", help="guide.md to fold into INDEX.md between the guide markers")
     parser.add_argument("--dump-abstracts", action="store_true",
                         help="print questions and abstracts to stdout and exit without writing")
+    parser.add_argument("--new-only", action="store_true",
+                        help="with --dump-abstracts: only papers found since manifest.refreshed")
     args = parser.parse_args()
 
     guide_text = None
@@ -169,6 +202,8 @@ def main() -> int:
     manifest = M.load(args)
     tdir = M.topic_dir(args)
     papers = sorted(M.papers_in(manifest, *LISTED_STATES), key=sort_key)
+    if args.new_only and manifest.get("refreshed"):
+        papers = [p for p in papers if (p.get("found_date") or "") >= manifest["refreshed"]]
     if not papers:
         M.log(f"index: no paper past selection for topic {args.topic}, nothing to index")
         return M.EXIT_NOTHING
