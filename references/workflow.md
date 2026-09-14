@@ -69,8 +69,8 @@ Collision → append `-2`, `-3`. The id is the pdf and md filename.
       "score": 0.83,
       "status": "found",
       "why": "",
-      "pdf": "pdf/<id>.pdf",
-      "md": "md/<id>/<id>.md",
+      "pdf": "pdf/<id>.pdf",     "pdf_via": "arxiv",
+      "md": "md/<id>/<id>.md",   "conversion": "local-text",
       "error": ""
     }
   }
@@ -99,27 +99,48 @@ dates.
 All seven fields are optional and read with a default, so a manifest written
 before they existed still loads and runs.
 
+`pdf_via` and `conversion` pre-date this release and are written by the later
+steps rather than by search. fetch.py records in `pdf_via` which route brought
+the file down, and convert.py reads it: a pdf that only came through the proxy
+or a mining API must be uploaded, because handing MinerU the publisher link
+would convert a login page into plausible markdown. convert.py sets
+`conversion: "local-text"` on a paper it read locally, and index.py reads that
+to mark the paper text-only in the header, the table and the abstract dump.
+
 ### status state machine
 
 ```
-seed ──search --seed────────────────────────▶ selected
+search, snowball ──▶ found
 found ──rank──▶ (score set) ──scout+select──▶ selected ──fetch──▶ pdf ──convert──▶ md
                                     │                       └──▶ no-pdf
                                     └──▶ rejected                        └──▶ failed
+
+found, rejected ──search --seed──▶ selected     rejected ──select.py──▶ selected
+no-pdf ──fetch --retry-no-pdf──▶ selected       no-pdf ──convert, URL source──▶ md
+no-pdf, failed ──pdf placed in pdf/ by hand──▶ pdf
 ```
 
 - `found`: returned by a search source, deduplicated.
 - `selected` / `rejected`: scout's decision, `why` filled for selected. A
   `--seed` paper skips the decision and enters directly as `selected` with
-  `why: "seed: named in the brief"`, whatever `--since` says.
+  `why: "seed: named in the brief"`, whatever `--since` says; one already in
+  the library is promoted in place, from `rejected` as readily as from `found`,
+  so naming a paper as a seed overrides an earlier rejection. `select.py` does
+  the same for an id the scout has changed its mind about.
 - `pdf`: file exists at `pdf/<id>.pdf`. A pdf the user drops in by hand is
   picked up by fetch.py (any status ≥ selected) and moved to `pdf`.
 - `no-pdf`: no open-access link, or download refused (paywall, 403). Kept in
   the index with its abstract.
 - `md`: `md/<id>/<id>.md` exists. `conversion: "local-text"` on the paper means
-  MinerU never ran on it and the markdown is a local pymupdf text extraction:
-  every word, but no figures, tables or formula markup. Only
-  `--local-text-fallback` produces these, and the file and `INDEX.md` both say so.
+  the markdown is a local pymupdf text extraction: every word, but no figures,
+  tables or formula markup. MinerU either never ran on the paper at all or ran
+  and failed; the manifest does not say which, because `error` is cleared on
+  every success, so only the run log tells the two apart. These appear without
+  any flag being passed: `--upload-fallback` defaults to `local-text`, and the
+  first MinerU upload timeout in a run sends every later upload-only paper to
+  the local reader. `--local-text-fallback` extends that to a paper whose URL
+  sources failed too, `--upload-fallback none` turns it off, and the file and
+  `INDEX.md` both say which papers were read this way.
 - `failed`: convert failed; `error` holds the last line of stderr per source
   tried (`url: …` / `upload: …`). Re-run `convert.py --retry-failed` to retry.
 
@@ -131,16 +152,19 @@ script takes `--topic <slug>` and `--root <dir>` (default `./references`).
 | script | reads → writes | notes |
 | --- | --- | --- |
 | `search.py --query Q [--query Q…] [--seed S…] [--since 2024] [--limit 100] [--arxiv auto\|on\|off] [--s2] [--jobs 4]` | sources → manifest `found`, seeds → `selected` | OpenAlex is primary and its queries run concurrently. Credentials are read from `~/.config/litrev/access.env` by `M.load_env()`, so nothing needs exporting; OpenAlex allows 1000 requests a day unauthenticated and 10000 with a free `OPENALEX_API_KEY`, which is what makes more than one library a day possible. arXiv defaults to `auto`: searched only for a query OpenAlex answered with fewer than 20 hits. Semantic Scholar is off unless `--s2` is passed and wants `S2_API_KEY` to be useful; `--no-s2` survives as a no-op. `--seed "<title>"`, `--seed doi:<doi>` or `--seed arxiv:<id>` resolves a named paper regardless of `--since`. Dedupe by DOI, arXiv and OpenAlex ids, then by title, exactly and fuzzily, which also joins a preprint to its published version. Abstract from OpenAlex inverted index, else S2, else arXiv. Prints a `saturation:` line giving the share of this round's deduplicated records that were new, and appends a `rounds` entry; a run with only `--seed` and no query does neither. |
-| `rank.py [--top 100] [--only triage.json] [--new-only]` | manifest → `score`, `candidates.md`, `candidates_titles.md` | score = tier_weight × max(recency, cites) × (0.35 + 0.35 × cites + 0.30 × rel) × (1 + max(0, min(snowball_hits, 3) − 1) / 2), where cites is log1p(citations_per_year) and rel is `relevance` (0.5 if null), each normalised to [0,1] by its own max over the manifest before combining, and a venue whose string contains "workshop" is forced to tier 3. The age term is `max(recency, cites)` so that a paper the field still cites is not discounted for being old. The snowball term is ×1 at zero or one connection, ×1.5 at two and ×2 at three or more: one paper in the selected set citing a candidate is not evidence, because everyone in a field cites the same few classics. Venue matching: an all-caps name (AAAI, TMI) matches as a whole word, a one-word name (Nature, Science) must equal the venue, a multi-word name matches as a substring, and the longest match wins across tiers; recency = 1.0 for the last two years, 0.7 for the two before, 0.4 older. candidates.md lists the top N with id, title, venue, year, citations, abstract; `candidates_titles.md` is the same list in the same order without the full abstracts — four lines per paper, the meta line carrying `via:` and `hits:` and the fourth being the first thirty words — and is what the scout triages before it reads a full abstract. `--only` restricts candidates.md to the `keep` and `undecided` ids of a triage.json; `--new-only` restricts both files to papers whose `found_date` is on or after `refreshed`; with no `refreshed` set it does nothing, so a first build ranks the whole library whether or not the flag is passed. |
-| `select.py --file selected.json [--triage triage.json]` | selected.json (+ triage.json) → `selected`/`rejected` | selected.json = `[{"id": "...", "why": "..."}]`; everything else in candidates becomes `rejected`. A paper already `selected` by an earlier round or by `--seed` keeps that status across a re-run. `--triage` additionally rejects every id in the triage file's `drop` list, including one that never reached candidates.md. |
+| `rank.py [--top 100] [--only triage.json] [--new-only]` | manifest → `score`, `candidates.md`, `candidates_titles.md` | score = tier_weight × max(recency, cites) × (0.35 + 0.35 × cites + 0.30 × rel) × (1 + max(0, min(snowball_hits, 3) − 1) / 2), where cites is log1p(citations_per_year) and rel is `relevance` (0.5 if null), each normalised to [0,1] by its own max over the manifest before combining, and a venue whose string contains "workshop" is forced to tier 3. The age term is `max(recency, cites)` so that a paper the field still cites is not discounted for being old. The snowball term is ×1 at zero or one connection, ×1.5 at two and ×2 at three or more: one paper in the selected set citing a candidate is not evidence, because everyone in a field cites the same few classics. Venue matching: an all-caps name (AAAI, TMI) matches as a whole word, a one-word name (Nature, Science) must equal the venue, a multi-word name matches as a substring, and the longest match wins across tiers; recency = 1.0 for the last two years, 0.7 for the two before, 0.4 older. candidates.md lists the top N with id, title, venue, year, citations, abstract; `candidates_titles.md` is the same list in the same order without the full abstracts — four lines per paper, the meta line carrying `via:` and `hits:` and the fourth being the first thirty words — and is what the scout triages before it reads a full abstract. `--only` restricts candidates.md, and only candidates.md, to the `keep` and `undecided` ids of a triage.json: `candidates_titles.md` is written before that filter runs and always holds the whole ranked list, so re-running rank with `--only` cannot shrink the file the next triage reads. `--new-only` restricts both files to papers whose `found_date` is on or after `refreshed`; with no `refreshed` set it does nothing, so a first build ranks the whole library whether or not the flag is passed. |
+| `select.py --file selected.json [--triage triage.json]` | selected.json (+ triage.json) → `selected`/`rejected` | selected.json = `[{"id": "...", "why": "..."}]`; everything else in candidates becomes `rejected`. A paper already `selected` by an earlier round or by `--seed` keeps that status across a re-run. `--triage` additionally rejects every id in the triage file's `drop` list, including one that never reached candidates.md, and is required whenever the ranking used `rank.py --only`: candidates.md then lists only the `keep` and `undecided` papers, so without the triage file the scout's `drop` ids stay `found`, come back in the next ranking, and are triaged and paid for again every round. |
 | `snowball.py [--from selected,pdf,no-pdf,md,failed] [--no-back] [--no-forward] [--since YEAR] [--max-per-paper 200]` | manifest → new `found` papers, `snowball.md` | One hop on the OpenAlex citation graph out of the papers already in the source states. Backward reads each source's `referenced_works`, stores them in `refs` and fetches the unknown ids in batches with the `openalex:` filter; forward asks for the papers the `cites:` filter names against a source. A new paper lands as `found` with `found_via` `snowball-back` or `snowball-forward` and `snowball_hits` set to the number of source papers connected to it. Prints `snowball: sources=S back=B forward=F new=N hits2plus=H`, writes `snowball.md` and appends a `rounds` entry. In that line `back` and `forward` count the distinct ids reached in each direction, including ids already in the library and ids OpenAlex cannot resolve, while `new` is the subset that resolved and merged as papers. They measure how much graph was walked and `new` how much of it was unseen, so a large `back` beside a small `new` is the citation graph's version of the `saturation:` signal. |
 | `fetch.py [--jobs 4] [--retry-no-pdf] [--verify-session]` | `selected` → `pdf` / `no-pdf` | Tries pdf_url, then arXiv `/pdf/<id>`, then the OpenAlex `best_oa_location` — one lookup that also returns `primary_location.landing_page_url` and the PMC id. When all of those refuse, the routes in `access.py` follow: Europe PMC (free), the Wiley and Elsevier mining APIs, and an institutional EZproxy host-rewrite with an exported cookie jar; each is active only when its credential is present in `~/.config/litrev/access.env` (see SKILL.md rule 5). Browser UA, 3 retries, skips on 403/402/HTML body; publisher hosts are held to one concurrent request with a 1.5 s pause. Already-present `pdf/<id>.pdf` → `pdf` without download. `--retry-no-pdf` returns `no-pdf` papers to `selected` for a re-run once credentials exist. `--verify-session` checks the proxy cookie jar on its own and prints `session: alive\|stale\|unconfigured`, exiting 0 / 2 / 4. In a normal run a stale session is caught once at the start and the EZproxy route is switched off for the rest of it, so the papers that needed it stay `selected` instead of each buying its own failed request. |
 | `convert.py [--jobs 4] [--model auto\|vlm\|pipeline] [--upload] [--retry-failed] [--upload-fallback local-text\|none] [--local-text-fallback]` | `pdf` (+ `no-pdf` with a URL) → `md` / `failed` | Runs `mineru-open-api extract <source> -o md/<id>/ -f md --language en` as N parallel subprocesses (the CLI's own --concurrency is reserved/unimplemented). `<source>` is tried in order: `https://arxiv.org/pdf/<arxiv>`, then `pdf_url`, then the local `pdf/<id>.pdf` — the URL forms make the MinerU server fetch the paper itself, so nothing is uploaded from this machine (uploads to the MinerU OSS bucket time out from many HPC / campus networks). `--upload` skips the URL attempts. A `no-pdf` paper with a URL is attempted too and stays `no-pdf` if it fails. Exit 3 with a clear message if no token is configured — see SKILL.md. Never falls back to flash-extract on its own. `--local-text-fallback` adds one last step for a paper MinerU could neither fetch nor accept: pymupdf reads the local pdf and writes a text-only markdown, marked `conversion: "local-text"`. It refuses a pdf with no text layer rather than filing an empty file. Off by default, because text without figures should be a deliberate choice. `--upload-fallback` (default `local-text`) handles the network that cannot upload at all: the first attempt that fails with an `upload:` timeout sets a run-wide flag, and every later paper whose only remaining route is an upload goes straight to the local text reader, with one log line saying so. `--upload-fallback none` disables that; `--local-text-fallback` remains as an alias that also covers URL failures. |
 | `index.py [--guide guide.md] [--dump-abstracts] [--new-only]` | manifest (+ guide.md) → `INDEX.md` | Table sorted by year desc then tier then citations; one `###` block per paper with status, files, abstract. If guide.md exists it is inserted verbatim between `<!-- guide -->` markers at the top. The header carries, under the counts, a `Selected but unread (N)` list with a reason per paper and a `Text only (no figures or tables)` line of ids, so nothing that was never read can be quoted as if it had been. `--dump-abstracts` prints id/title/venue/year/abstract for the librarian and exits, appending `[unread: no-pdf\|selected\|failed]` or `[text-only]` to a paper's id line where it applies; `--new-only` restricts the dump to papers whose `found_date` is on or after `refreshed`, which is what a delta guide needs. |
-| `pipeline.py [--jobs 4] [--refresh]` | runs fetch → convert → index once | The main agent runs this in the background after each selection batch. `--refresh` does something else entirely: it re-runs the manifest's stored queries since the last refresh, snowballs forward, ranks the new papers only, stamps `refreshed` and stops for triage and select. It fetches and converts nothing. |
+| `pipeline.py [--jobs 4] [--refresh]` | runs fetch → convert → index once | The main agent runs this in the background after each selection batch. `--refresh` does something else entirely: it re-runs the manifest's stored queries since the last refresh, snowballs forward, ranks the new papers only, stamps `refreshed` and stops for triage and select. It fetches and converts nothing. The stamp is deliberately skipped when search or snowball returned 2: they save what arrived, so ranking it is still worth doing, but the window they were asked for was not covered and closing it would hide the gap from every later refresh. Such a run says so and returns 2 itself, and the papers it did find are ranked normally. |
 
-Exit codes: 0 ok · 1 usage/argument error · 2 network/source unavailable ·
-3 MinerU token missing or rejected · 4 nothing to do (informational).
+Exit codes: 0 ok · 1 usage/argument error, and also Ctrl-C: fetch, convert and
+pipeline.py catch the interrupt, save the progress they have and return 1, so
+a 1 from a long run means an interrupt rather than a bad command line ·
+2 network/source unavailable · 3 MinerU token missing or rejected · 4 nothing
+to do (informational).
 
 ## Rate limiting
 
@@ -148,10 +172,11 @@ Every request to `api.openalex.org` or `export.arxiv.org` goes through
 `M.host_gate(host, min_interval)`, a context manager holding an exclusive
 `fcntl` lock on a file under `~/.cache/litrev/locks` (`LITREV_LOCK_DIR` moves
 it). One request per host at a time across every process on the machine, and
-two of them at least `min_interval` seconds apart; arXiv asks for three
-seconds. The gate is cross-process on purpose. Two searches started from two
-shells returned nothing but 429s before it existed, and the same lock is what
-lets one search run its queries concurrently.
+the next one at least `min_interval` seconds after the previous one finished,
+since the gate stamps the lock file on release rather than on acquisition;
+arXiv asks for three seconds. The gate is cross-process on purpose. Two
+searches started from two shells returned nothing but 429s before it existed,
+and the same lock is what lets one search run its queries concurrently.
 
 OpenAlex meters by credit rather than by rate. One request costs one credit
 and a paginated query costs several, the allowance is 1000 a day

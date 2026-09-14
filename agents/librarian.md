@@ -37,7 +37,10 @@ Rules:
   papers added since, write a **delta**: keep the previous taxonomy, add each
   new paper to its group with one sentence, extend the timeline, and revise
   only the gaps that the new papers close or open. Do not rewrite unchanged
-  text.
+  text — carry it through word for word. The file you write is still the whole
+  guide, every previous section included. index.py replaces the guide block of
+  `INDEX.md` with this file rather than appending to it, so a file holding only
+  the new material deletes the rest of the guide.
 - Papers marked `[unread: …]` or `[text-only]` in the dump were selected but
   not read in full; say so where their contribution is load-bearing, and never
   present an abstract's claim from such a paper as a verified result.
