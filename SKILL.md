@@ -147,7 +147,9 @@ uv run scripts/pipeline.py --topic <slug> --jobs 4
 A stale proxy session is detected once at the start and skipped for the run;
 the cookie procedure is in references/institutional-access.md. A MinerU
 upload timeout switches the remaining upload-only papers to local text
-automatically (`--upload-fallback none` to disable).
+automatically (`--upload-fallback none` to disable). A paper that ended
+`failed` keeps that status and its error across runs; to convert it again,
+run `convert.py --retry-failed`, which reads the pdf still on disk.
 
 ### 6. Reading guide — librarian
 
@@ -181,7 +183,8 @@ Papers found before the last refresh that the scout never triaged stay `found`
 and are invisible to `--new-only`, which filters on `found_date`; a plain
 `rank.py` run lists them again.
 Then `pipeline.py` as usual and `index.py --dump-abstracts --new-only` for the
-librarian, giving it the previous `guide.md` so it writes a delta.
+librarian, giving it the previous `guide.md` so it writes a delta. An empty
+dump exits 4 and says so; do not call the librarian on it.
 
 ## Answer
 
