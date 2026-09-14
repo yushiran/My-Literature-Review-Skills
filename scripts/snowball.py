@@ -82,22 +82,27 @@ def main() -> int:
         M.log("snowball: no source paper carries an OpenAlex id; run search.py first")
         return M.EXIT_NOTHING
     known = {p["openalex"] for p in manifest["papers"].values() if p.get("openalex")}
-    # old: hits = collections.Counter()       # candidate openalex id -> number of sources connected
+    # old: hits = collections.Counter()       # counts one source twice when both directions reach a candidate
     links = collections.defaultdict(set)  # candidate openalex id -> set of source paper ids linking to it
-    via = {}                            # candidate id -> snowball-back | snowball-forward
+    via = {}                            # candidate id reached -> snowball-back | snowball-forward
     raw = {}                            # candidate id -> raw work (for the merge)
+    kind_of = {}                        # id of a fetched work -> kind; a merged work answers under another id
     report = []
     try:
         if not args.no_back:
-            need = [p for p in sources if not p.get("refs")]
+            # old: need = [p for p in sources if not p.get("refs")]   # [] reads as never fetched, so every round refetches
+            need = [p for p in sources if p.get("refs") is None]   # absent = never fetched; [] = fetched, no references
             for w in fetch_by_ids([p["openalex"] for p in need], "id,referenced_works"):
-                # old: pid = next(p["id"] for p in need if p["openalex"] == short(w["id"]))
+                # old: pid = next(p["id"] for p in need if p["openalex"] == short(w["id"]))   # StopIteration on a merged id
                 pid = next((p["id"] for p in need if p["openalex"] == short(w["id"])), None)
                 if pid:                      # OpenAlex answers a merged work under its canonical id
-                    manifest["papers"][pid]["refs"] = [short(r) for r in w.get("referenced_works") or []]
+                    # old: manifest["papers"][pid]["refs"] = [short(r) for r in w.get("referenced_works") or []]
+                    # A null in referenced_works shortens to "", which is not an id.
+                    manifest["papers"][pid]["refs"] = [s for s in (short(r) for r in w.get("referenced_works") or []) if s]
             for p in sources:
-                # old: refs = [r for r in p.get("refs") or [] if r not in known]
-                refs = p.get("refs") or []    # count every reference; "known" only gates the merge below
+                # old: refs = [r for r in p.get("refs") or [] if r not in known]   # a known paper never gains a hit
+                # old: refs = p.get("refs") or []    # an old manifest can still hold "" from a null reference
+                refs = [r for r in p.get("refs") or [] if r]   # every reference; "known" only gates the merge below
                 for r in refs:
                     links[r].add(p["id"])
                     via.setdefault(r, "snowball-back")
@@ -105,17 +110,31 @@ def main() -> int:
             # old: back_ids = [r for r in hits if via[r] == "snowball-back"]
             back_ids = [r for r in links if via[r] == "snowball-back" and r not in known]
             for w in fetch_by_ids(back_ids, OPENALEX_SELECT):
+                # old: raw[short(w["id"])] = w   # via.get() then missed it, so it merged under neither kind
                 raw[short(w["id"])] = w
+                kind_of[short(w["id"])] = "snowball-back"
+            # OpenAlex answers a merged work under its canonical id, which nobody asked for.
+            # One unanswered request and one unasked answer pair unambiguously; move the hits
+            # there. Anything else is reported rather than counted as reached in silence.
+            asked = set(back_ids)
+            missing = [r for r in back_ids if r not in raw]
+            extra = [r for r in raw if r not in asked]
+            if len(missing) == 1 and len(extra) == 1:
+                links[extra[0]] |= links.pop(missing[0])
+                via[extra[0]] = via.pop(missing[0])
+            elif missing or extra:
+                M.log(f"snowball: {len(missing)} reference ids unanswered, {len(extra)} answered under another id")
         if not args.no_forward:
             for i, p in enumerate(sources):
                 citers = fetch_citers(p["openalex"], args.since, args.max_per_paper)
                 for w in citers:
                     wid = short(w["id"])
-                    # old: if wid in known: continue
+                    # old: if wid in known: continue   # a known paper never gained a hit from this round
                     links[wid].add(p["id"])
                     via.setdefault(wid, "snowball-forward")
                     if wid not in known:     # known papers still count a hit; no need to re-fetch them
                         raw.setdefault(wid, w)
+                        kind_of.setdefault(wid, "snowball-forward")
                 # old: if report and report[-1][0] == p["id"] and i < len(report):
                 if i < len(report):     # backward appended one row per source, in this same order
                     report[i] = (p["id"], report[i][1], len(citers))
@@ -129,13 +148,28 @@ def main() -> int:
     hits = {w: len(s) for w, s in links.items()}  # distinct source papers linking to each candidate
     total_before = len(manifest["papers"])
     new = 0
+    landed = []      # (record, paper id) for every record merge placed, on a new paper or an existing one
     for kind in ("snowball-back", "snowball-forward"):
-        recs = [openalex_record(raw[w]) for w in raw if via.get(w) == kind]
-        new += merge(manifest, recs, via=kind)
+        # old: recs = [openalex_record(raw[w]) for w in raw if via.get(w) == kind]
+        recs = [openalex_record(raw[w]) for w in raw if kind_of.get(w) == kind]
+        # old: new += merge(manifest, recs, via=kind)
+        new += merge(manifest, recs, via=kind, landed=landed)
+    # Where each candidate id ended up. A record that merge joined onto an existing paper by
+    # title keeps that paper's own OpenAlex id, so the id the hits are counted under is on no paper.
+    pid_of = {r["openalex"]: pid for r, pid in landed if r["openalex"]}
     for p in manifest["papers"].values():
-        if p.get("openalex") in hits:
-            p["snowball_hits"] = max(int(p.get("snowball_hits") or 0), hits[p["openalex"]])
-    hits2 = sum(1 for w, n in hits.items() if n >= 2 and w in raw)
+        if p.get("openalex"):
+            pid_of.setdefault(p["openalex"], p["id"])
+    # old: for p in manifest["papers"].values():
+    # old:     if p.get("openalex") in hits:
+    # old:         p["snowball_hits"] = max(int(p.get("snowball_hits") or 0), hits[p["openalex"]])
+    for w, n in hits.items():
+        pid = pid_of.get(w)
+        if pid:
+            p = manifest["papers"][pid]
+            p["snowball_hits"] = max(int(p.get("snowball_hits") or 0), n)
+    # old: hits2 = sum(1 for w, n in hits.items() if n >= 2 and w in raw)   # raw holds this round's fetches only
+    hits2 = sum(1 for n in hits.values() if n >= 2)
     # Distinct ids reached in each direction: known ones and ones OpenAlex cannot resolve
     # both count here; "new" above is only the subset that resolved and merged as papers.
     back_count = sum(1 for v in via.values() if v == "snowball-back")
@@ -149,9 +183,13 @@ def main() -> int:
     lines = [f"# snowball for {manifest['topic']}: {len(sources)} sources, {new} new papers", "",
              "| source | references | citers fetched |", "| --- | ---: | ---: |"]
     lines += [f"| {pid} | {nb} | {nf} |" for pid, nb, nf in report]
-    top = sorted(((n, w) for w, n in hits.items() if w in raw), reverse=True)[:20]
-    lines += ["", "Most connected new candidates (hits = number of source papers linked):", ""]
-    lines += [f"- {n} hits · {short(w)} · {raw[w].get('title')}" for n, w in top]
+    # old: top = sorted(((n, w) for w, n in hits.items() if w in raw), reverse=True)[:20]   # new-only, so it hid the gate's own hits2plus
+    top = sorted(((n, w) for w, n in hits.items()), reverse=True)[:20]
+    titles = {w: manifest["papers"][pid].get("title") for w, pid in pid_of.items()}
+    # old: lines += ["", "Most connected new candidates (hits = number of source papers linked):", ""]
+    lines += ["", "Most connected candidates (hits = number of source papers linked):", ""]
+    # old: lines += [f"- {n} hits · {short(w)} · {raw[w].get('title')}" for n, w in top]
+    lines += [f"- {n} hits · {short(w)} · {titles.get(w) or '(unresolved)'}" for n, w in top]
     (M.topic_dir(args) / "snowball.md").write_text("\n".join(lines) + "\n")
     # old: print(f"snowball: sources={len(sources)} back={sum(1 for v in via.values() if v == 'snowball-back')} " f"forward={sum(1 for v in via.values() if v == 'snowball-forward')} new={new} hits2plus={hits2}")
     print(f"snowball: sources={len(sources)} back={back_count} forward={forward_count} new={new} hits2plus={hits2}")

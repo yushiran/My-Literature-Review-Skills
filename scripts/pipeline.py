@@ -42,7 +42,7 @@ def main() -> int:
     args = parser.parse_args()
 
     here = Path(__file__).resolve().parent
-    # old: scripts = {step: here / f"{step}.py" for step in STEPS}
+    # old: scripts = {step: here / f"{step}.py" for step in STEPS}   # KeyError on scripts["search"] under --refresh
     scripts = {step: here / f"{step}.py" for step in (REFRESH_STEPS if args.refresh else STEPS)}
     missing = [str(p) for p in scripts.values() if not p.is_file()]
     if missing:
@@ -51,12 +51,13 @@ def main() -> int:
 
     if args.refresh:
         manifest = M.load(args)
-        queries = manifest.get("queries") or []
+        # old: queries = manifest.get("queries") or []   # a hand-typed string becomes one --query flag per character
+        queries = M.as_list(manifest.get("queries"))
         if not queries:
             M.log("pipeline: --refresh needs stored queries; run search.py first")
             return M.EXIT_USAGE
         prev = manifest.get("refreshed")     # the date rank.py --new-only filters on
-        # old: since_year = int((prev or manifest.get("created") or M.today())[:4])
+        # old: since_year = int((prev or manifest.get("created") or M.today())[:4])   # dies on a hand-edited date
         try:
             since_year = int(str(prev or manifest.get("created") or M.today())[:4])
         except ValueError:   # a hand-edited date must not kill the run before a single step
@@ -98,16 +99,24 @@ def main() -> int:
             # Skipped after a partial search: the window is not covered, so do not close it.
             manifest["refreshed"] = M.today()
             M.save(args, manifest)
-        # rank.py's candidates= is its own count after every filter and the --top cap,
-        # so it is what the file holds. Recompute only if that line is gone.
+        # old: # rank.py's candidates= is its own count after every filter and the --top cap,
+        # old: # so it is what the file holds. Recompute only if that line is gone.
+        # rank.py's candidates= is its count after --new-only and the --top cap, which is what
+        # candidates_titles.md holds on this path because it never passes --only; --only filters
+        # after that file is written. Recompute only if the line is gone.
         m = re.search(r"\bcandidates=(\d+)", counted)
         if m:
             n = int(m.group(1))
         else:
             n = len([p for p in M.papers_in(manifest, "found", "selected", "rejected")
                      if not prev or (p.get("found_date") or "") >= prev])
-        print(f"refresh: {n} new candidates in candidates_titles.md; "
-              "run the scout TRIAGE then SELECT, then pipeline.py", flush=True)
+        # old: print(f"refresh: {n} new candidates in candidates_titles.md; "
+        # old:       "run the scout TRIAGE then SELECT, then pipeline.py", flush=True)
+        if n:
+            print(f"refresh: {n} new candidates in candidates_titles.md; "
+                  "run the scout TRIAGE then SELECT, then pipeline.py", flush=True)
+        else:
+            print("refresh: no new candidates since the last refresh; nothing to triage", flush=True)
         if deferred != M.EXIT_OK:
             M.log("pipeline: the search was incomplete, so the refresh date was not advanced; "
                   "re-run --refresh once the network settles")

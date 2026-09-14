@@ -111,11 +111,11 @@ def get_json_retry(url, headers=None, name="source"):
             last = e
             if e.code == 429:
                 if attempt == len(BACKOFF):
-                    # old: raise RateLimited(url)
+                    # old: raise RateLimited(url)   # puts the api_key in the exception text
                     raise RateLimited(safe_url(url))
             elif e.code < 500:
                 # Bad request or auth: retrying will not help.
-                # old: raise SourceDown(f"{name} HTTP {e.code} for {url}")
+                # old: raise SourceDown(f"{name} HTTP {e.code} for {url}")   # puts the api_key in the exception text
                 raise SourceDown(f"{name} HTTP {e.code} for {safe_url(url)}")
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
             last = e
@@ -124,7 +124,7 @@ def get_json_retry(url, headers=None, name="source"):
             # a ValueError from urllib can carry the whole URL, and ValueError is caught above
             M.log(f"{name}: {safe_url(str(last))}; retry in {BACKOFF[attempt]}s")
             time.sleep(BACKOFF[attempt])
-    # old: raise SourceDown(f"{name} unreachable: {last}")
+    # old: raise SourceDown(f"{name} unreachable: {last}")   # puts the api_key in the exception text
     raise SourceDown(f"{name} unreachable: {safe_url(str(last))}")
 
 
@@ -495,8 +495,13 @@ def near_duplicate(p: dict, r: dict) -> bool:
 
 
 # def merge(manifest, recs):                              # old: no provenance
-def merge(manifest, recs, via="query"):
-    """Adds recs to manifest tagged with how they were found; returns number of new papers."""
+# old: def merge(manifest, recs, via="query"):
+def merge(manifest, recs, via="query", landed=None):
+    """Adds recs to manifest tagged with how they were found; returns number of new papers.
+
+    landed, if given, collects (record, paper id) for each record placed. A caller cannot work
+    this out from the record's own ids: a title match leaves the paper's doi/arxiv/openalex as
+    they were, so the record's id can end up on no paper at all."""
     by_doi, by_arxiv, by_title, by_fuzzy, by_openalex = {}, {}, {}, {}, {}
 
     def index(p):
@@ -546,6 +551,8 @@ def merge(manifest, recs, via="query"):
             if via not in p.setdefault("found_via", []):
                 p["found_via"].append(via)
             index(p)
+            if landed is not None:
+                landed.append((r, pid))
             continue
         first = r["authors"][0] if r["authors"] else ""
         pid = M.make_id(manifest, r["year"], first, r["title"])
@@ -553,6 +560,8 @@ def merge(manifest, recs, via="query"):
         p = M.new_paper(pid, sources=[r["source"]], found_via=[via], **fields)
         manifest["papers"][pid] = p
         index(p)
+        if landed is not None:
+            landed.append((r, pid))
         new += 1
     return new
 
@@ -665,6 +674,8 @@ def main():
 
     # Seeds: canonical papers named in the brief, force-selected regardless of --since.
     seeded = 0
+    # A hand-edited string here would make "spec not in ..." a substring test and .append raise.
+    manifest["seeds"] = M.as_list(manifest.get("seeds"))
     # old: for spec in args.seed:
     for spec in seeds:
         try:
@@ -678,10 +689,14 @@ def main():
         if not r:
             M.log(f"seed: {spec!r} not found on OpenAlex")
             continue
-        before = set(manifest["papers"])
-        merge(manifest, [r], via="seed")
-        pid = next(iter(set(manifest["papers"]) - before), None) or next(
-            (p["id"] for p in manifest["papers"].values() if p.get("openalex") == r["openalex"]), None)
+        # old: before = set(manifest["papers"])
+        # old: merge(manifest, [r], via="seed")
+        # old: pid = next(iter(set(manifest["papers"]) - before), None) or next(
+        # old:     (p["id"] for p in manifest["papers"].values() if p.get("openalex") == r["openalex"]), None)
+        # old: an empty r["openalex"] matched the first paper that also had none, and promoted it
+        landed = []      # merge reports the paper it placed the record on, new or existing
+        merge(manifest, [r], via="seed", landed=landed)
+        pid = landed[0][1] if landed else None
         if pid is None:
             # r had no title, so merge() dropped it outright: nothing to promote.
             M.log(f"seed: {spec!r} resolved to a record with no title; skipped")
@@ -697,6 +712,8 @@ def main():
     # old: filled = arxiv_backfill(manifest) if args.arxiv != "off" else 0
     filled = arxiv_backfill(manifest) if args.arxiv != "off" and not arxiv_skipped else 0
     M.log(f"arxiv backfill: {filled} abstracts")
+    # Same for queries, which is also a bare subscript away from a KeyError on a hand-edited file.
+    manifest["queries"] = M.as_list(manifest.get("queries"))
     for q in queries:
         if q not in manifest["queries"]:
             manifest["queries"].append(q)
@@ -728,7 +745,7 @@ def main():
         print(f"saturation: new={new} of returned={returned} ({100 * frac:.1f}%), "
               f"{already} hits match already-rejected titles", flush=True)
         # old: if total_before and frac < 0.05:   # returned==0 gives frac 1.0, so it cannot fire
-        # old: if frac < 0.05:
+        # old: if frac < 0.05:   # non-inclusive, so an exactly-5% round never reports saturation
         # Inclusive: 1 new of 20 returned is exactly 5%, i.e. 95% of the round already known.
         if frac <= 0.05:
             print("saturation: below 5%, this query axis is saturated; try seeds or snowball instead", flush=True)
