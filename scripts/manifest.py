@@ -1,11 +1,14 @@
 """Shared helpers for the literature-review scripts.
 
 One manifest.json per topic is the single source of truth; every script loads
-it, changes only the papers in its input state, and saves atomically. Schema
-and state machine: references/workflow.md.
+it, changes only the papers in its input state, and saves atomically. A save
+merges: it re-reads the file under a short lock and applies only this process's
+own changes, so steps run in parallel do not overwrite each other. Schema and
+state machine: references/workflow.md.
 """
 import argparse
 import contextlib
+import copy
 import datetime as _dt
 import fcntl
 import json
@@ -16,6 +19,7 @@ import sys
 import tempfile
 import time
 import unicodedata
+import weakref
 from pathlib import Path
 
 STATES = ("found", "selected", "rejected", "pdf", "no-pdf", "md", "failed")
@@ -85,28 +89,171 @@ def manifest_path(args) -> Path:
     return topic_dir(args) / "manifest.json"
 
 
+LIST_KEYS = ("rounds", "seeds", "queries")   # append-only logs; every other top-level key is a scalar
+SET_LIKE = ("seeds", "queries")              # ... and these two hold no duplicates, as search.py enforces too
+
+
+class _Manifest(dict):
+    """What load() hands out. A dict subclass only because a plain dict cannot be
+    weak-referenced, and save() needs to find the snapshot for this exact object."""
+    __slots__ = ("__weakref__",)
+
+
+_SNAPSHOTS = {}   # id(manifest) -> (weakref to it, its path, its state as loaded)
+
+
+def _remember(m: _Manifest, path: Path) -> _Manifest:
+    for k, (ref, _, _) in list(_SNAPSHOTS.items()):
+        if ref() is None:
+            del _SNAPSHOTS[k]   # load() is the only thing that grows this, so pruning here bounds it
+    _SNAPSHOTS[id(m)] = (weakref.ref(m), str(path), copy.deepcopy(dict(m)))
+    return m
+
+
 def load(args) -> dict:
+    """The manifest, plus a private snapshot of it that save() diffs against.
+
+    A malformed file exits EXIT_USAGE with one line rather than a traceback, the
+    way rank.py and select.py already handle a malformed triage.json.
+    """
     p = manifest_path(args)
     if p.exists():
-        return json.loads(p.read_text())
-    return {
-        "topic": args.topic,
-        "created": _dt.date.today().isoformat(),
-        "questions": [],
-        "queries": [],
-        "since": None,
-        "papers": {},
-    }
+        # old: return json.loads(p.read_text())
+        try:
+            state = json.loads(p.read_text())
+            if not isinstance(state, dict) or not isinstance(state.get("papers"), dict):
+                raise ValueError("no 'papers' object; is this a manifest?")
+        except (OSError, ValueError) as e:   # JSONDecodeError is a ValueError: a truncated file lands here
+            log(f"manifest: cannot read {p}: {e}")
+            sys.exit(EXIT_USAGE)
+    else:
+        state = {
+            "topic": args.topic,
+            "created": _dt.date.today().isoformat(),
+            "questions": [],
+            "queries": [],
+            "since": None,
+            "papers": {},
+        }
+    return _remember(_Manifest(state), p)
+
+
+_LOCK_WARNED = False
+
+
+@contextlib.contextmanager
+def _manifest_lock(path: Path):
+    """Exclusive for the milliseconds of one merge-and-write, never for a whole run.
+
+    Beside the manifest rather than in LITREV_LOCK_DIR: two users sharing one library
+    root have different caches and would take two different locks. Opened read-only,
+    because flock needs no write bit and the second user may not own the file.
+    """
+    global _LOCK_WARNED
+    fd = None
+    try:
+        fd = os.open(str(path) + ".lock", os.O_RDONLY | os.O_CREAT, 0o666)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError as e:
+        # Read-only or lockless filesystem. The merge still re-reads the file here, so
+        # the window shrinks from the whole run to this one write instead of vanishing.
+        if not _LOCK_WARNED:
+            _LOCK_WARNED = True
+            log(f"manifest: no lock on {path} ({e}); saves are merged but not serialised")
+        if fd is not None:
+            os.close(fd)
+            fd = None
+    try:
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)   # closing the descriptor releases the flock
+
+
+def _merge_into(disk: dict, snap, cur: dict) -> dict:
+    """Apply the changes cur made since snap onto disk, in place, and return disk.
+
+    snap advances to exactly what this save writes, so the next save of the same
+    manifest carries only what changed after it. Without that a long-running writer
+    re-asserts its old values at every save and undoes whatever moved on meanwhile.
+    """
+    # No snapshot (a hand-built dict): treat every difference from disk as ours, which
+    # keeps the other writer's papers and fields instead of dropping them.
+    base = snap if snap is not None else disk
+    on_disk = disk.setdefault("papers", {})
+    was_papers = base.setdefault("papers", {}) if snap is not None else on_disk
+    for pid, p in (cur.get("papers") or {}).items():
+        was, now = was_papers.get(pid), on_disk.get(pid)
+        if was is None or not isinstance(now, dict):
+            on_disk[pid] = was_papers[pid] = copy.deepcopy(p)   # we added it, or disk holds no usable copy
+            continue
+        for k, v in p.items():
+            if k not in was or was[k] != v:
+                now[k] = was[k] = v   # only the fields we changed, so another writer's fields survive
+        if snap is not None:
+            for k in list(was):       # convert.py drops paper['conversion'] on a full re-conversion
+                if k not in p:
+                    now.pop(k, None)
+                    was.pop(k, None)
+    # A paper on disk that we never loaded is left alone; nothing in this codebase deletes one.
+    for k in LIST_KEYS:
+        mine = cur.get(k)
+        if not isinstance(mine, list):
+            continue
+        have = disk.get(k)
+        if not isinstance(have, list):
+            have = disk[k] = []
+        was = base.get(k)
+        if not isinstance(was, list):
+            was = base[k] = []        # with no snapshot base is disk, so this is `have` and stays one list
+        for item in mine:
+            if item in was:
+                continue              # already written, by an earlier save of this same manifest
+            if not (k in SET_LIKE and item in have):
+                have.append(item)     # seeds and queries are sets: search.py never appends a duplicate either
+            if was is not have:
+                was.append(item)
+    for k, v in cur.items():
+        if k == "papers" or k in LIST_KEYS:
+            continue
+        if k not in base or base[k] != v:
+            disk[k] = base[k] = v     # a scalar we only read stays as the other writer left it
+    return disk
 
 
 def save(args, manifest: dict) -> None:
-    """Atomic write so a parallel reader never sees a half-written file."""
+    """Merge this process's own changes into the file as it stands now, atomically.
+
+    A whole-file write loses everything another process did during our read-modify-write
+    window, and those windows are minutes to hours: a fetch run, a snowball traversal.
+    So we take a short exclusive lock, re-read, apply only the diff against what load()
+    handed us, write, and release.
+
+    The limit, stated rather than hidden: if two processes change the SAME field of the
+    SAME paper, the later save wins. A real transaction is the only way round that, and
+    the blast radius here is one field instead of another process's entire run.
+    """
     p = manifest_path(args)
-    fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".manifest-", suffix=".json")
-    with os.fdopen(fd, "w") as f:
-        json.dump(manifest, f, indent=1, ensure_ascii=False)
-    os.chmod(tmp, 0o666 & ~UMASK)  # mkstemp files start at 0600
-    os.replace(tmp, p)
+    entry = _SNAPSHOTS.get(id(manifest))
+    # Identity, not just id(): a dead manifest's address can be reused by another object.
+    snap = entry[2] if entry and entry[0]() is manifest and entry[1] == str(p) else None
+    with _manifest_lock(p):
+        disk = None
+        if p.exists():
+            try:
+                disk = json.loads(p.read_text())
+            except (OSError, ValueError) as e:
+                log(f"manifest: {p} is unreadable, replacing it with this run's copy ({e})")
+        # A diff carries only changes, so an absent file has to be written whole.
+        out = _merge_into(disk, snap, manifest) if isinstance(disk, dict) else manifest
+        fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".manifest-", suffix=".json")
+        with os.fdopen(fd, "w") as f:
+            json.dump(out, f, indent=1, ensure_ascii=False)
+        os.chmod(tmp, 0o666 & ~UMASK)  # mkstemp files start at 0600
+        os.replace(tmp, p)
+    if out is manifest and snap is not None:
+        snap.clear()                   # all of it is on disk now, so a later save carries only what follows
+        snap.update(copy.deepcopy(dict(manifest)))
 
 
 @contextlib.contextmanager
