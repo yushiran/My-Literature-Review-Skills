@@ -84,6 +84,10 @@ class RateLimited(Exception):
     """HTTP 429 that survived the backoff schedule."""
 
 
+class ArxivRateLimited(RateLimited):
+    """arXiv meters by egress IP, so every arXiv call in this run is refused, not just this one."""
+
+
 # ---------------------------------------------------------------- http
 
 def safe_url(url):
@@ -268,6 +272,9 @@ def arxiv_title(aid):
             body = http_get(url)
         entry = ET.fromstring(body).find(ATOM + "entry")
     except (urllib.error.URLError, TimeoutError, OSError, ET.ParseError) as e:
+        # old: raise SourceDown(f"arxiv unreachable: {e}")
+        if isinstance(e, urllib.error.HTTPError) and e.code == 429:
+            raise ArxivRateLimited(url)   # the whole run is refused, not just this seed
         raise SourceDown(f"arxiv unreachable: {e}")
     return clean(entry.findtext(ATOM + "title")) if entry is not None else ""
 
@@ -412,7 +419,7 @@ def search_arxiv(query, since, limit):
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             # arXiv meters by egress IP, so retrying a 429 from a shared node cannot help.
             if isinstance(e, urllib.error.HTTPError) and e.code == 429:
-                raise RateLimited(url)
+                raise ArxivRateLimited(url)
             last = e
             if attempt < len(BACKOFF):
                 M.log(f"arxiv: {e}; retry in {BACKOFF[attempt]}s")
@@ -443,6 +450,10 @@ def arxiv_backfill(manifest, cap=200):
             with M.host_gate("export.arxiv.org", 3.0):
                 root = ET.fromstring(http_get(url))
         except (urllib.error.URLError, TimeoutError, OSError, ET.ParseError) as e:
+            # old: M.log(f"arxiv backfill: batch failed, {e}"); continue
+            if isinstance(e, urllib.error.HTTPError) and e.code == 429:
+                M.log("arxiv backfill: rate-limited by egress IP, stopping; the remaining batches would fail too")
+                break     # every later batch hits the same per-IP limiter and deepens the penalty
             M.log(f"arxiv backfill: batch failed, {e}")
             continue
         by_id = {}
@@ -659,6 +670,9 @@ def main():
         try:
             r = lookup_seed(spec)
         except (SourceDown, RateLimited) as e:
+            # old: M.log(f"seed: {spec!r} lookup failed, {e}"); continue
+            if isinstance(e, ArxivRateLimited):
+                arxiv_skipped = True   # every later arxiv: seed would hit the same per-IP limiter
             M.log(f"seed: {spec!r} lookup failed, {e}")
             continue
         if not r:
@@ -702,9 +716,11 @@ def main():
     M.save(args, manifest)
 
     s2_summary = "skipped" if (s2_skipped and counts["s2"] == 0) else str(counts["s2"])
+    # arxiv=0 alone cannot say whether we were refused or never needed to ask.
+    arxiv_summary = "rate-limited" if (arxiv_skipped and counts["arxiv"] == 0) else str(counts["arxiv"])
     # old: print(f"found={len(manifest['papers'])} new={new} openalex={counts['openalex']} " f"s2={s2_summary} arxiv={counts['arxiv']}", flush=True)
     print(f"found={len(manifest['papers'])} new={new} openalex={counts['openalex']} "
-          f"s2={s2_summary} arxiv={counts['arxiv']} seeds={seeded}", flush=True)
+          f"s2={s2_summary} arxiv={arxiv_summary} seeds={seeded}", flush=True)
     if queries:
         # old: frac = new / total_before if total_before else 1.0   # a growth rate, not a saturation ratio
         frac = new / returned if returned else 1.0
