@@ -195,6 +195,11 @@ def _merge_into(disk: dict, snap, cur: dict) -> dict:
                     now[k] = v
             now["snowball_hits"] = max(int(now.get("snowball_hits") or 0), int(p.get("snowball_hits") or 0))
             now["citations"] = max(int(now.get("citations") or 0), int(p.get("citations") or 0))
+            # Filling would keep disk's `found` and drop a decision this run made in the
+            # same breath as creating the paper: a --seed hit lands `found` still carrying
+            # its seed `why`. A transition off `found` is a decision, so it wins.
+            if p.get("status") and p["status"] != "found":
+                now["status"] = p["status"]
             was_papers[pid] = copy.deepcopy(now)
             continue
         if was is None or not isinstance(now, dict):
@@ -260,8 +265,13 @@ def save(args, manifest: dict) -> None:
         disk = None
         if p.exists():
             try:
-                disk = json.loads(p.read_text())
+                fresh = json.loads(p.read_text())
+                # load() rejects this shape; so must the re-read, or _merge_into walks a None.
+                if not isinstance(fresh, dict) or not isinstance(fresh.get("papers"), dict):
+                    raise ValueError("no 'papers' object; is this a manifest?")
+                disk = fresh   # only after it validates, or the except below leaves the bad dict bound
             except (OSError, ValueError) as e:
+                disk = None
                 log(f"manifest: {p} is unreadable, replacing it with this run's copy ({e})")
         # A diff carries only changes, so an absent file has to be written whole.
         out = _merge_into(disk, snap, manifest) if isinstance(disk, dict) else manifest

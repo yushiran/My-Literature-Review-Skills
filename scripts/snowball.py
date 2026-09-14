@@ -169,7 +169,10 @@ def main() -> int:
             p = manifest["papers"][pid]
             p["snowball_hits"] = max(int(p.get("snowball_hits") or 0), n)
     # old: hits2 = sum(1 for w, n in hits.items() if n >= 2 and w in raw)   # raw holds this round's fetches only
-    hits2 = sum(1 for n in hits.values() if n >= 2)
+    # old: hits2 = sum(1 for n in hits.values() if n >= 2)   # counted ids that landed on no paper
+    # A quarter of referenced ids resolve to nothing and a titleless record is dropped by
+    # merge; pid_of holds every id that reached a paper, this round or an earlier one.
+    hits2 = sum(1 for w, n in hits.items() if n >= 2 and w in pid_of)
     # Distinct ids reached in each direction: known ones and ones OpenAlex cannot resolve
     # both count here; "new" above is only the subset that resolved and merged as papers.
     back_count = sum(1 for v in via.values() if v == "snowball-back")
