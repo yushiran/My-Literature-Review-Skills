@@ -151,6 +151,22 @@ def write_titles(path: Path, manifest: dict, ranked: list) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
+def write_parts(path: Path, manifest: dict, ranked: list, parts: int, writer, *extra) -> list:
+    """Split `ranked` into `parts` files beside `path` (candidates_titles.1.md, .2.md, ...) for as many
+    scouts to read side by side; round-robin, so every part spans the ranking. Stale parts of an
+    earlier run with more parts are removed first. Returns the paths written."""
+    for stale in path.parent.glob(f"{path.stem}.[0-9]*{path.suffix}"):
+        stale.unlink()
+    if parts < 2:
+        return []
+    written = []
+    for k in range(parts):
+        part_path = path.with_name(f"{path.stem}.{k + 1}{path.suffix}")
+        writer(part_path, manifest, ranked[k::parts], *extra)
+        written.append(part_path)
+    return written
+
+
 def write_candidates(path: Path, manifest: dict, ranked: list, topic_dir: Path) -> None:
     lines = [f"# {manifest['topic']}: {len(ranked)} candidates listed"]
     # old: questions = manifest.get("questions") or []   # hand-edited field: a bare string became N one-character questions
@@ -184,9 +200,15 @@ def main() -> int:
     parser.add_argument("--venues", default=str(DEFAULT_VENUES), help="venue tier file (default references/venues.yaml)")
     parser.add_argument("--only", help="triage.json: list only its keep and undecided ids in candidates.md")
     parser.add_argument("--new-only", action="store_true", help="list only papers found since manifest.refreshed")
+    parser.add_argument("--parts", type=int, default=1,
+                        help="also split the listing into K files, candidates_titles.<k>.md (candidates.<k>.md under --only), "
+                             "one per scout to triage or select side by side (default 1: no parts)")
     args = parser.parse_args()
     if args.top < 1:
         M.log("rank: --top must be >= 1")
+        return M.EXIT_USAGE
+    if args.parts < 1:
+        M.log("rank: --parts must be >= 1")
         return M.EXIT_USAGE
 
     venues_path = Path(args.venues)
@@ -230,6 +252,8 @@ def main() -> int:
     # old: write_titles(titles_out, manifest, ranked)   # --only overwrote the list the scout triaged
     if not args.only:                 # --only's job is candidates.md; the scout has read the titles already
         write_titles(titles_out, manifest, ranked[: args.top])
+        for part in write_parts(titles_out, manifest, ranked[: args.top], args.parts, write_titles):
+            M.log(f"rank: wrote {part}")
     n_before_only = len(ranked)       # for the empty-result log below: did --only empty it?
     if args.only:
         try:
@@ -249,6 +273,9 @@ def main() -> int:
         ranked = [p for p in ranked if p["id"] in allowed]
     ranked = ranked[: args.top]       # cut last: a paper the scout kept must survive the filter first
     write_candidates(out, manifest, ranked, tdir)
+    if args.only:                     # parts of the abstracts file are for SELECT, so only the triaged list is split
+        for part in write_parts(out, manifest, ranked, args.parts, write_candidates, tdir):
+            M.log(f"rank: wrote {part}")
     M.save(args, manifest)
     M.log(f"rank: scored {len(papers)} papers, {len(candidates)} candidates, listed {len(ranked)}")
     # old: print(f"ranked={len(candidates)} candidates={len(ranked)} written={out}")                          # before the titles file existed

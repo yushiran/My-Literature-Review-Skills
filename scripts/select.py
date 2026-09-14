@@ -53,22 +53,32 @@ def candidate_ids(path: Path) -> set:
 
 def main() -> int:
     parser = M.base_parser("Apply selected.json: mark selected, reject the other candidates.")
-    parser.add_argument("--file", required=True, help="selected.json: array of {id, why}")
+    # old: parser.add_argument("--file", required=True, help="selected.json: array of {id, why}")
+    parser.add_argument("--file", required=True, nargs="+",
+                        help="selected.json, or the selected.<k>.json parts K scouts wrote: arrays of {id, why}")
     parser.add_argument("--target", type=int, default=30, help="expected batch size, warn if exceeded (default 30)")
     parser.add_argument("--triage", help="triage.json from the scout TRIAGE task; its drop list is rejected too")
     args = parser.parse_args()
 
-    sel_path = Path(args.file)
-    if not sel_path.is_file():
-        M.log(f"select: file not found: {sel_path}")
-        return M.EXIT_USAGE
-    try:
-        selection = load_selection(sel_path)
-    except (ValueError, json.JSONDecodeError) as e:
-        M.log(f"select: cannot read {sel_path}: {e}")
-        return M.EXIT_USAGE
+    selection, seen = [], set()
+    for name in args.file:            # one file, or one part per scout; an id in two parts is used once
+        sel_path = Path(name)
+        if not sel_path.is_file():
+            M.log(f"select: file not found: {sel_path}")
+            return M.EXIT_USAGE
+        try:
+            part = load_selection(sel_path)
+        except (ValueError, json.JSONDecodeError) as e:
+            M.log(f"select: cannot read {sel_path}: {e}")
+            return M.EXIT_USAGE
+        for pid, why in part:
+            if pid in seen:
+                M.log(f"select: {pid} is in more than one selection file, using the first")
+                continue
+            seen.add(pid)
+            selection.append((pid, why))
     if not selection:
-        M.log(f"select: {sel_path} lists no ids, nothing to do")
+        M.log(f"select: {', '.join(args.file)} lists no ids, nothing to do")
         return M.EXIT_NOTHING
     if len(selection) > args.target:
         M.log(f"select: {len(selection)} ids selected, target is {args.target}")

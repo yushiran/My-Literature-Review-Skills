@@ -100,25 +100,54 @@ arXiv is searched only when OpenAlex returns fewer than 20 hits for a query
 Venue tiers are in [references/venues.yaml](references/venues.yaml); the user
 may edit it.
 
-### 2. Triage — scout, cheap
+### 2. Triage — scout, cheap, in parts
 
 Give `scout` the brief and `candidates_titles.md`; it writes `triage.json`.
+One scout over 200 titles ran for more than forty minutes (2026-09-14): it
+reasons over every id before it writes, and what it writes names every id, so
+the call grows with the list. Split the list instead and launch the scouts
+side by side, in one message:
 
 ```sh
-uv run scripts/rank.py --topic <slug> --only references/<slug>/triage.json
+uv run scripts/rank.py --topic <slug> --top 200 --parts 4
 ```
 
-It rewrites `candidates.md` only, leaving `candidates_titles.md` as the run
-above wrote it, and it filters the whole ranking rather than the `--top` cut,
-so a paper the scout kept from below the cut still reaches select. The cut then
-applies to what triage kept, silently, so pass the same `--top` as step 1 if the
-scout keeps more than 100 papers.
+writes `candidates_titles.1.md` … `.4.md` beside the full file, round-robin so
+each part spans the ranking. Give part k to its own scout with the same brief
+and have it write `triage.<k>.json`. A one-CPU login node runs two agents at a
+time, so four parts finish in about half the time of one call, not a quarter.
+Then merge and filter:
+
+```sh
+uv run scripts/triage.py --topic <slug> --merge references/<slug>/triage.1.json references/<slug>/triage.2.json …
+uv run scripts/rank.py --topic <slug> --only references/<slug>/triage.json --top 200 --parts 2
+```
+
+`triage.py` writes `triage.json` and refuses an id that sits in two lists or a
+title in `candidates_titles.md` that no part triaged, so a scout that skipped
+the tail of its file is caught here rather than at select. `rank.py --only`
+rewrites `candidates.md` only, leaving `candidates_titles.md` as the run above
+wrote it, and it filters the whole ranking rather than the `--top` cut, so a
+paper the scout kept from below the cut still reaches select. The cut then
+applies to what triage kept, silently, so pass the same `--top` as step 1 if
+the scout keeps more than 100 papers. `--parts` under `--only` splits
+`candidates.md` into `candidates.<k>.md` for step 3; use it when triage kept
+more than about 40.
 
 ### 3. Select — scout, the costly call, now over 20–40 abstracts not 100
 
+One scout per `candidates.<k>.md`, each writing `selected.<k>.json`, launched
+together; or one scout over `candidates.md` when it is short enough.
+
 ```sh
-uv run scripts/select.py --topic <slug> --file references/<slug>/selected.json --triage references/<slug>/triage.json --target <n>
+uv run scripts/select.py --topic <slug> --file references/<slug>/selected.1.json references/<slug>/selected.2.json --triage references/<slug>/triage.json --target <n>
 ```
+
+Two of the scout's rules are global, and a part cannot see across parts: at
+most a third of the set from one group or line of work, and the workshop
+version of a kept paper. Read the merged `why` lines once for those two before
+running `select.py`. An id cannot be selected twice, since a paper sits in one
+part.
 
 If `selected.json` has not appeared 20 minutes after launching the scout,
 look for `selected.partial.json`; relaunch and tell it to continue from there.

@@ -3,9 +3,9 @@
 <p align="center"><img src="docs/mascot.png" alt="literature-review mascot" width="240"></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.0-blue" alt="version 0.2.0">
+  <img src="https://img.shields.io/badge/version-0.2.1-blue" alt="version 0.2.1">
   <img src="https://img.shields.io/badge/Claude%20Code-plugin-8A4FFF" alt="Claude Code plugin">
-  <img src="https://img.shields.io/badge/tests-113%20passing-brightgreen" alt="113 tests passing">
+  <img src="https://img.shields.io/badge/tests-129%20passing-brightgreen" alt="129 tests passing">
   <img src="https://img.shields.io/badge/python-%E2%89%A5%203.9-3776AB" alt="Python 3.9+">
   <img src="https://img.shields.io/badge/dependencies-stdlib%20only-lightgrey" alt="standard library only">
 </p>
