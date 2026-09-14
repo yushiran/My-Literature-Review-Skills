@@ -43,6 +43,23 @@ def test_only_restricts_candidates_and_snowball_bonus_orders(args):
     assert "2025-a-p1" in t   # --only restricts candidates.md only; the titles file stays unfiltered
 
 
+def test_only_rejects_a_triage_file_with_no_recognisable_key(args):
+    """A renamed key used to keep nothing silently: rank wrote an empty candidates.md and
+    exited 4, while select.py over the same file rejected nothing and exited 0. It is now a
+    usage error naming the file. A file carrying `drop` alone is still a valid triage that
+    legitimately empties candidates.md, so the check must not fire on it."""
+    lib(args)
+    d = M.topic_dir(args)
+    assert run(args, []) == 0
+    before = (d / "candidates.md").read_text()
+    bad = d / "triage.json"
+    bad.write_text(json.dumps({"kept": ["2025-a-p0"], "dropped": ["2025-a-p1"]}))
+    assert run(args, ["--only", str(bad)]) == M.EXIT_USAGE
+    assert (d / "candidates.md").read_text() == before   # it refuses before writing anything
+    bad.write_text(json.dumps({"drop": ["2025-a-p0", "2025-a-p1", "2025-a-p2"]}))
+    assert run(args, ["--only", str(bad)]) == M.EXIT_NOTHING   # a real triage that kept nothing
+
+
 def test_only_keeps_a_paper_ranked_below_the_top_cut(args):
     """SKILL.md ranks 120 titles for the scout and runs the post-triage command at the
     default 100, so a paper the scout read at rank 103 and kept must still reach

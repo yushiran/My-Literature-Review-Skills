@@ -29,6 +29,9 @@ PREPRINT_MARKERS = ("arxiv", "biorxiv", "medrxiv", "ssrn")
 ABSTRACT_MARKERS = ("scientific meeting", "proceedings on cd-rom",
                     "book of abstracts", "abstract supplement", "meeting abstracts")
 CANDIDATE_STATES = ("found", "selected", "rejected")
+# A triage.json must carry at least one of these. select.py --triage checks the same set,
+# so a renamed key is one diagnosis whichever script the user ran first.
+TRIAGE_KEYS = ("keep", "drop", "undecided")
 
 
 def parse_venues(path: Path) -> dict:
@@ -231,6 +234,10 @@ def main() -> int:
     if args.only:
         try:
             tri = json.loads(Path(args.only).read_text())
+            # Before any .get: `.get(k) or []` substitutes an empty list, so the guard below
+            # cannot tell a renamed key from an empty one, and a typo silently keeps nothing.
+            if not isinstance(tri, dict) or not set(TRIAGE_KEYS) & set(tri):
+                raise ValueError("no keep, drop or undecided key; not a triage.json")
             keep, undecided = tri.get("keep") or [], tri.get("undecided") or []
             if not isinstance(keep, list) or not isinstance(undecided, list):
                 raise ValueError("'keep' and 'undecided' must be lists")
