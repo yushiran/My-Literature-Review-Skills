@@ -131,8 +131,10 @@ no-pdf, failed ──pdf placed in pdf/ by hand──▶ pdf
 - `no-pdf`: no open-access link, or download refused (paywall, 403). Kept in
   the index with its abstract.
 - `md`: `md/<id>/<id>.md` exists. `conversion: "local-text"` on the paper means
-  MinerU never ran on it and the markdown is a local pymupdf text extraction:
-  every word, but no figures, tables or formula markup. These appear without
+  the markdown is a local pymupdf text extraction: every word, but no figures,
+  tables or formula markup. MinerU either never ran on the paper at all or ran
+  and failed; the manifest does not say which, because `error` is cleared on
+  every success, so only the run log tells the two apart. These appear without
   any flag being passed: `--upload-fallback` defaults to `local-text`, and the
   first MinerU upload timeout in a run sends every later upload-only paper to
   the local reader. `--local-text-fallback` extends that to a paper whose URL
