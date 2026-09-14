@@ -7,11 +7,13 @@
 Lists every paper past selection (selected, pdf, no-pdf, md, failed) as a
 table plus one abstract block each. Selected/no-pdf/failed papers and any
 local-text conversion are called out in a header block and, in the dump,
-an inline marker. A reading guide sits between
+an inline marker. The header also counts the `found` papers nothing ever
+triaged, the one state no other listing reaches. A reading guide sits between
 <!-- guide --> markers at the top: --guide replaces it, otherwise the block
 already in INDEX.md is kept, otherwise a placeholder. --dump-abstracts prints
 the questions and abstracts for the librarian and writes nothing;
---new-only then restricts the dump to papers found since manifest.refreshed.
+--new-only then restricts the dump to papers found since manifest.refreshed,
+and exits 4 with a reason when that leaves nothing.
 Contract: references/workflow.md.
 """
 import datetime as _dt
@@ -117,6 +119,11 @@ def render_index(manifest: dict, papers: list, guide: str, tdir: Path) -> str:
         f"{counts['failed']} failed, {counts['selected']} pending."
     )
     lines.append("")
+    # `found` is not a listed state, and after a refresh rank --new-only skips anything found
+    # before the stamp, so this count is the only place an untriaged paper is ever mentioned.
+    n_found = len(M.papers_in(manifest, "found"))
+    if n_found:
+        lines.extend([f"{n_found} papers found but never triaged.", ""])
     lines.extend(unread_lines(papers))
     lines.extend(questions_lines(manifest))
     lines.extend([GUIDE_OPEN, guide or NO_GUIDE, GUIDE_CLOSE, ""])
@@ -169,7 +176,8 @@ def render_dump(manifest: dict, papers: list) -> str:
     lines = questions_lines(manifest)
     for p in papers:
         year = p.get("year") if p.get("year") is not None else "n.d."
-        # old: lines.append(f"### {p['id']}")
+        # old: lines.append(f"### {p['id']}")   # reverting drops the [unread]/[text-only] tags,
+        # old: so the librarian cannot tell which entries rest on an abstract alone
         lines.append(f"### {p['id']}{marker(p)}")
         lines.append(p.get("title") or "(no title)")
         lines.append(f"{p.get('venue') or '(no venue)'} · {year} · {int(p.get('citations') or 0)} citations")
@@ -194,6 +202,8 @@ def main() -> int:
     parser.add_argument("--new-only", action="store_true",
                         help="with --dump-abstracts: only papers found since manifest.refreshed")
     args = parser.parse_args()
+    if args.new_only and not args.dump_abstracts:
+        M.log("index: --new-only applies to --dump-abstracts only, ignored")
 
     guide_text = None
     if args.guide:
@@ -208,6 +218,7 @@ def main() -> int:
     papers = sorted(M.papers_in(manifest, *LISTED_STATES), key=sort_key)
     # old: if args.new_only and manifest.get("refreshed"):
     # old:     papers = [p for p in papers if (p.get("found_date") or "") >= manifest["refreshed"]]
+    # old: ^ reverting these two silently truncates INDEX.md to the papers found since the stamp
     if not papers:
         M.log(f"index: no paper past selection for topic {args.topic}, nothing to index")
         return M.EXIT_NOTHING
@@ -216,6 +227,14 @@ def main() -> int:
         dump_papers = papers  # local to the dump: INDEX.md below must always see every paper
         if args.new_only and manifest.get("refreshed"):
             dump_papers = [p for p in papers if (p.get("found_date") or "") >= manifest["refreshed"]]
+            # rank.py exits 4 and says why for the same condition. Exiting 0 with an empty
+            # dump hands the librarian nothing while the pipeline reports success.
+            if not dump_papers:
+                M.log(f"index: --new-only found nothing since manifest.refreshed "
+                      f"({manifest.get('refreshed')}), nothing for the librarian")
+                return M.EXIT_NOTHING
+        # old: sys.stdout.write(render_dump(manifest, papers))       # pre-release: --new-only was
+        # old: M.log(f"index: dumped {len(papers)} abstracts")       # not applied to the dump at all
         sys.stdout.write(render_dump(manifest, dump_papers))
         M.log(f"index: dumped {len(dump_papers)} abstracts")
         return M.EXIT_OK

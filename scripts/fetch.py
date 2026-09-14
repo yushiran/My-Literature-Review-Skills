@@ -50,8 +50,13 @@ HOST_LIMITS["ezproxy"], HOST_PAUSE["ezproxy"] = 1, 1.5
 # EZproxy answers 200 with its login page when the session cookie is gone, so the
 # only signal is the URL we ended up at. A.PROXY_LOGIN is the one copy of the pattern.
 # old: PROXY_LOGIN_RE = re.compile(r"^https?://login\.[^/]*\.oclc\.org/|/login\?(?:qurl|url)=", re.I)
+# old: ^ reverting restores a second copy of the pattern, free to drift from access.py's
 CREDENTIALED_VIA = ("ezproxy", "wiley-tdm", "elsevier-api")
-PREPLACE_STATES = ("selected", "pdf", "no-pdf", "failed")
+# `failed` is out: that paper's pdf is the one fetch downloaded itself, so a file on disk is
+# no evidence of a hand placement. Re-running the conversion is `convert.py --retry-failed`.
+# old: PREPLACE_STATES = ("selected", "pdf", "no-pdf", "failed")   # reverting erases convert.py's
+# error on every run, retries the paper for ever, and makes --retry-failed a no-op in the pipeline
+PREPLACE_STATES = ("selected", "pdf", "no-pdf")
 SAVE_EVERY = 5
 CHUNK = 1 << 20
 MAX_ERROR = 200
@@ -106,7 +111,8 @@ def _opener():
         return _opener_cache["o"]
 
 
-# def open_url(url, timeout):                                  # old: no per-candidate headers
+# def open_url(url, timeout):                                  # old: no per-candidate headers, so
+# the wiley-tdm and elsevier-api routes cannot send the token that is the whole point of them
 def open_url(url, timeout, headers=None):
     h = {"User-Agent": USER_AGENT, "Accept": "application/pdf,*/*;q=0.8"}
     h.update(headers or {})
@@ -193,7 +199,8 @@ def download(url, timeout, dest, headers=None):
     done = False
     try:
         with os.fdopen(fd, "wb") as out, open_url(url, timeout, headers) as r:
-            # old: if PROXY_LOGIN_RE.search(r.geturl() or ""):
+            # old: if PROXY_LOGIN_RE.search(r.geturl() or ""):   # NameError on its own: that
+            # old: pattern is commented out at the top of this file, and A.PROXY_LOGIN replaced it
             if A.PROXY_LOGIN.search(r.geturl() or ""):
                 raise SessionExpired("proxy session expired, re-export the cookie jar")
             head = r.read(CHUNK)
@@ -259,7 +266,8 @@ def get_json(url, timeout, what):
         return {}
 
 
-# def openalex_pdf_url(doi, timeout, what):          # old: only the OA pdf link
+# def openalex_pdf_url(doi, timeout, what):          # old: only the OA pdf link, so reverting
+# leaves the Europe PMC and proxy routes in access.py with no landing page and no PMC id
 def openalex_meta(doi, timeout, what):
     """(oa_pdf_url, landing_page_url, pmcid) for the DOI; empty strings when absent.
 
@@ -285,13 +293,16 @@ def openalex_meta(doi, timeout, what):
 
 def fetch_one(pid, paper, dest, timeout):
     """Worker: try every candidate for one paper. Returns a result dict, never raises."""
-    reasons, n_refused, n_transient, tried, dead = [], 0, 0, set(), []
+    # old: reasons, n_refused, n_transient, tried, dead = [], 0, 0, set(), []   # reverting makes
+    # the fallback route order vary per process, so the same paper records a different pdf_via
+    reasons, n_refused, n_transient, tried, dead = [], 0, 0, {}, []   # dict: an ordered set
 
     def attempt(via, url, headers=None):
         nonlocal n_refused, n_transient
         if url in tried:
             return None
-        tried.add(url)
+        # old: tried.add(url)
+        tried[url] = None
         try:
             size = with_retries(lambda u, t: download(u, t, dest, headers), url, timeout, f"{pid} {via}")
             return {"id": pid, "status": "pdf", "via": via, "size": size, "error": ""}
@@ -330,7 +341,7 @@ def fetch_one(pid, paper, dest, timeout):
         # old: known_urls=(url, paper.get("pdf_url") or ""))   # `url` is unbound when
         # the paper has no pdf_url, no arXiv id and no DOI, which lost the whole chain.
         extra = A.candidates(paper, landing, pmcid, lambda u: get_json(u, timeout, f"{pid} epmc"),
-                             known_urls=tuple(tried))   # every URL attempt() actually tried
+                             known_urls=tuple(tried))   # every URL attempt() tried, in that order
     except Exception as e:  # a broken route must never lose the paper
         extra, _ = [], reasons.append(f"access: {describe(e)}")
     for via, url, headers in extra:
@@ -367,7 +378,8 @@ def main():
         M.log("fetch: --jobs must be >= 1 and --timeout > 0")
         return M.EXIT_USAGE
 
-    # Before the manifest, so this neither needs nor creates a library.
+    # Before the manifest, so this neither reads nor creates one. --topic is still
+    # required: it comes from the shared parser, which is not this script's to restructure.
     if args.verify_session:
         alive = A.session_alive(lambda u: final_url(u, args.timeout))
         print(f"session: {'unconfigured' if alive is None else 'alive' if alive else 'stale'}")
@@ -470,7 +482,8 @@ def main():
 
     remaining = len(M.papers_in(manifest, "selected"))
     print(f"pdf={n_pdf} no-pdf={n_nopdf} pre-placed={n_pre} remaining_selected={remaining}")
-    # old: if session_dead:
+    # old: if session_dead:   # reverting stays silent and exits 0 on the run that found the
+    # old: session stale up front and turned the proxy route off for every paper
     if session_dead or stale_session:
         M.log("fetch: the institutional proxy sent us to its login page. Re-export the cookie\n"
               "       jar from a freshly signed-in browser tab, then re-run with --retry-no-pdf.\n"

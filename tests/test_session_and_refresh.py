@@ -1,3 +1,4 @@
+import os
 import sys
 import urllib.error
 from pathlib import Path
@@ -6,9 +7,20 @@ import access as A
 import fetch as F
 import pipeline as P
 
+# access.py runs load_env() at import, and the imports above run at collection time,
+# before any fixture can. Snapshot what that import left in this process.
+ENV_AT_IMPORT = dict(os.environ)
+
 # What rank.py prints; candidates= is its count after every filter and the --top cap.
 RANK_LINE = "ranked=9 candidates=3 written=/x/candidates.md titles=/x/candidates_titles.md"
 REFRESH_SCRIPTS = ("search.py", "snowball.py", "rank.py")
+
+
+def test_no_credential_reached_this_process_before_the_fixtures_ran():
+    """conftest's autouse fixture cannot cover this: collection imports access.py, which
+    reads ~/.config/litrev/access.env, before the first fixture runs."""
+    leaked = sorted(k for k in M.SECRETS if k in ENV_AT_IMPORT)
+    assert not leaked, f"import-time load_env() put {leaked} into the test process"
 
 
 def test_session_alive_detects_login_redirect(monkeypatch):
