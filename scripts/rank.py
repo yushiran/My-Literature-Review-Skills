@@ -150,7 +150,7 @@ def write_titles(path: Path, manifest: dict, ranked: list) -> None:
 
 def write_candidates(path: Path, manifest: dict, ranked: list, topic_dir: Path) -> None:
     lines = [f"# {manifest['topic']}: {len(ranked)} candidates listed"]
-    # old: questions = manifest.get("questions") or []
+    # old: questions = manifest.get("questions") or []   # hand-edited field: a bare string became N one-character questions
     questions = M.as_list(manifest.get("questions"))
     if questions:
         lines.append("Research questions:")
@@ -221,7 +221,7 @@ def main() -> int:
         candidates = [p for p in candidates if (p.get("found_date") or "") >= manifest["refreshed"]]
     # candidates.sort(key=lambda p: (-p["score"], -int(p.get("citations") or 0), p["id"]))    # old: no new-only filter, no titles file
     # ranked = candidates[: args.top]                                                          # old: see above
-    # old: ranked = sorted(candidates, key=...)[: args.top]   # cut before --only dropped kept papers
+    # old: ranked = sorted(candidates, key=lambda p: (-p["score"], -int(p.get("citations") or 0), p["id"]))[: args.top]   # cut ran before --only, dropping papers the scout kept
     ranked = sorted(candidates, key=lambda p: (-p["score"], -int(p.get("citations") or 0), p["id"]))
     titles_out = tdir / "candidates_titles.md"
     # old: write_titles(titles_out, manifest, ranked)   # --only overwrote the list the scout triaged
@@ -243,7 +243,9 @@ def main() -> int:
     write_candidates(out, manifest, ranked, tdir)
     M.save(args, manifest)
     M.log(f"rank: scored {len(papers)} papers, {len(candidates)} candidates, listed {len(ranked)}")
-    # old: print(f"... titles={titles_out}")   # claimed a titles file --only no longer rewrites
+    # old: print(f"ranked={len(candidates)} candidates={len(ranked)} written={out}")                          # before the titles file existed
+    # old: print(f"ranked={len(candidates)} candidates={len(ranked)} written={out} titles={titles_out}")      # claims a write --only no longer makes
+    # pipeline.py parses candidates= off this line; keep the field name and the count it holds.
     print(f"ranked={len(candidates)} candidates={len(ranked)} written={out} "
           f"titles={titles_out}{' (unchanged)' if args.only else ''}")
     if not ranked:
