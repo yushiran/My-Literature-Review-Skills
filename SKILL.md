@@ -108,6 +108,12 @@ Give `scout` the brief and `candidates_titles.md`; it writes `triage.json`.
 uv run scripts/rank.py --topic <slug> --only references/<slug>/triage.json
 ```
 
+It rewrites `candidates.md` only, leaving `candidates_titles.md` as the run
+above wrote it, and it filters the whole ranking rather than the `--top` cut,
+so a paper the scout kept from below the cut still reaches select. The cut then
+applies to what triage kept, silently, so pass the same `--top` as step 1 if the
+scout keeps more than 100 papers.
+
 ### 3. Select — scout, the costly call, now over 20–40 abstracts not 100
 
 ```sh
@@ -127,8 +133,10 @@ uv run scripts/rank.py --topic <slug>
 One hop back finds the canon, one hop forward the newest followers. Ranking
 here covers the whole library, not just the new papers: `--new-only` needs a
 `refreshed` date, and only `pipeline.py --refresh` ever sets one. Repeat
-triage and select on `candidates_titles.md`; stop when snowball's `new` is
-under 5 % of the library.
+triage and select on `candidates_titles.md`; stop when snowball's printed
+`new=` is under 5 % of the `found=` count the last search printed, which is the
+whole library. `snowball.py` prints no percentage of its own, and the `back=`
+and `forward=` counts beside `new=` are not the base.
 
 ### 5. Fetch, convert, index — scripts, in the background
 
@@ -167,7 +175,11 @@ uv run scripts/pipeline.py --topic <slug> --refresh
 
 Re-runs the stored queries since the last refresh, snowballs forward from
 everything past selection, ranks only the new ones, and stops for triage +
-select.
+select. Triage and select are steps 2 and 3 above, run unchanged: the `--only`
+command keeps the new-paper `candidates_titles.md` the refresh just wrote.
+Papers found before the last refresh that the scout never triaged stay `found`
+and are invisible to `--new-only`, which filters on `found_date`; a plain
+`rank.py` run lists them again.
 Then `pipeline.py` as usual and `index.py --dump-abstracts --new-only` for the
 librarian, giving it the previous `guide.md` so it writes a delta.
 

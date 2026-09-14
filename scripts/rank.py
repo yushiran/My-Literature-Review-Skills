@@ -29,6 +29,9 @@ PREPRINT_MARKERS = ("arxiv", "biorxiv", "medrxiv", "ssrn")
 ABSTRACT_MARKERS = ("scientific meeting", "proceedings on cd-rom",
                     "book of abstracts", "abstract supplement", "meeting abstracts")
 CANDIDATE_STATES = ("found", "selected", "rejected")
+# A triage.json must carry at least one of these. select.py --triage checks the same set,
+# so a renamed key is one diagnosis whichever script the user ran first.
+TRIAGE_KEYS = ("keep", "drop", "undecided")
 
 
 def parse_venues(path: Path) -> dict:
@@ -150,7 +153,7 @@ def write_titles(path: Path, manifest: dict, ranked: list) -> None:
 
 def write_candidates(path: Path, manifest: dict, ranked: list, topic_dir: Path) -> None:
     lines = [f"# {manifest['topic']}: {len(ranked)} candidates listed"]
-    # old: questions = manifest.get("questions") or []
+    # old: questions = manifest.get("questions") or []   # hand-edited field: a bare string became N one-character questions
     questions = M.as_list(manifest.get("questions"))
     if questions:
         lines.append("Research questions:")
@@ -221,13 +224,20 @@ def main() -> int:
         candidates = [p for p in candidates if (p.get("found_date") or "") >= manifest["refreshed"]]
     # candidates.sort(key=lambda p: (-p["score"], -int(p.get("citations") or 0), p["id"]))    # old: no new-only filter, no titles file
     # ranked = candidates[: args.top]                                                          # old: see above
-    ranked = sorted(candidates, key=lambda p: (-p["score"], -int(p.get("citations") or 0), p["id"]))[: args.top]
+    # old: ranked = sorted(candidates, key=lambda p: (-p["score"], -int(p.get("citations") or 0), p["id"]))[: args.top]   # cut ran before --only, dropping papers the scout kept
+    ranked = sorted(candidates, key=lambda p: (-p["score"], -int(p.get("citations") or 0), p["id"]))
     titles_out = tdir / "candidates_titles.md"
-    write_titles(titles_out, manifest, ranked)
+    # old: write_titles(titles_out, manifest, ranked)   # --only overwrote the list the scout triaged
+    if not args.only:                 # --only's job is candidates.md; the scout has read the titles already
+        write_titles(titles_out, manifest, ranked[: args.top])
     n_before_only = len(ranked)       # for the empty-result log below: did --only empty it?
     if args.only:
         try:
             tri = json.loads(Path(args.only).read_text())
+            # Before any .get: `.get(k) or []` substitutes an empty list, so the guard below
+            # cannot tell a renamed key from an empty one, and a typo silently keeps nothing.
+            if not isinstance(tri, dict) or not set(TRIAGE_KEYS) & set(tri):
+                raise ValueError("no keep, drop or undecided key; not a triage.json")
             keep, undecided = tri.get("keep") or [], tri.get("undecided") or []
             if not isinstance(keep, list) or not isinstance(undecided, list):
                 raise ValueError("'keep' and 'undecided' must be lists")
@@ -236,10 +246,15 @@ def main() -> int:
             M.log(f"rank: cannot read {args.only}: {e}")
             return M.EXIT_USAGE
         ranked = [p for p in ranked if p["id"] in allowed]
+    ranked = ranked[: args.top]       # cut last: a paper the scout kept must survive the filter first
     write_candidates(out, manifest, ranked, tdir)
     M.save(args, manifest)
     M.log(f"rank: scored {len(papers)} papers, {len(candidates)} candidates, listed {len(ranked)}")
-    print(f"ranked={len(candidates)} candidates={len(ranked)} written={out} titles={titles_out}")
+    # old: print(f"ranked={len(candidates)} candidates={len(ranked)} written={out}")                          # before the titles file existed
+    # old: print(f"ranked={len(candidates)} candidates={len(ranked)} written={out} titles={titles_out}")      # claims a write --only no longer makes
+    # pipeline.py parses candidates= off this line; keep the field name and the count it holds.
+    print(f"ranked={len(candidates)} candidates={len(ranked)} written={out} "
+          f"titles={titles_out}{' (unchanged)' if args.only else ''}")
     if not ranked:
         # M.log("rank: no paper in found/selected/rejected, nothing for the scout")  # old: --only/--new-only can empty ranked too
         if args.new_only and n_pool and not candidates:
