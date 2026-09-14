@@ -1,5 +1,7 @@
 # literature-review
 
+<p align="center"><img src="docs/mascot.png" alt="literature-review mascot" width="240"></p>
+
 A Claude Code skill that builds a local, indexed literature library for a
 research topic and answers later questions from the index.
 
