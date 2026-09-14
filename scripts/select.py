@@ -19,6 +19,7 @@ import manifest as M  # noqa: E402
 # PAST_SELECTION = ("pdf", "no-pdf", "md", "failed")     # old: a re-run demoted unfetched selected papers
 PAST_SELECTION = ("selected", "pdf", "no-pdf", "md", "failed")
 CANDIDATE_LINE = re.compile(r"^## \d+\. (\S+)\s*$")
+TRIAGE_KEYS = ("keep", "drop", "undecided")   # a triage.json with none of these is malformed
 
 
 def load_selection(path: Path) -> list:
@@ -98,11 +99,16 @@ def main() -> int:
     if args.triage:
         try:
             # drop = set(json.loads(Path(args.triage).read_text()).get("drop") or [])     # old: didn't check 'drop' is a list
-            drop_list = json.loads(Path(args.triage).read_text()).get("drop") or []
+            # old: drop_list = json.loads(Path(args.triage).read_text()).get("drop") or []   # reverting
+            # hides a misspelled key behind a valid empty list, so the guard below never sees it
+            triage = json.loads(Path(args.triage).read_text())
+            if not isinstance(triage, dict) or not set(triage) & set(TRIAGE_KEYS):
+                raise ValueError(f"no {' / '.join(TRIAGE_KEYS)} key in the file")
+            drop_list = triage.get("drop") or []
             if not isinstance(drop_list, list):
                 raise ValueError("'drop' must be a list")
-            drop = set(drop_list)
-        except (OSError, json.JSONDecodeError, AttributeError, ValueError) as e:
+            drop = set(drop_list)   # an unhashable entry raises TypeError, caught below
+        except (OSError, TypeError, json.JSONDecodeError, AttributeError, ValueError) as e:
             M.log(f"select: cannot read {args.triage}: {e}")
             return M.EXIT_USAGE
     # if not cands:     # old: false once a non-empty drop list could reject on its own
