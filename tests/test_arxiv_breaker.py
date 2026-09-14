@@ -45,3 +45,21 @@ def test_arxiv_title_reports_the_limit_rather_than_a_dead_source(monkeypatch):
         pass
     else:
         raise AssertionError("arxiv_title turned a 429 into SourceDown, so the run never learns to stop")
+
+
+def test_a_rate_limited_run_stops_asking_for_later_arxiv_seeds(args, monkeypatch, capsys):
+    """The flag was set in the seed handler and never read by the seed loop, so every
+    later arxiv: seed still paid a request and a 3 s gate to a source that had refused."""
+    calls = []
+    monkeypatch.setattr(S, "http_get", lambda url, *a, **k: calls.append(url) or http_429(url))
+    monkeypatch.setattr(S, "openalex_by_doi", lambda *a, **k: None)   # the DataCite DOI misses
+    monkeypatch.setattr(S, "arxiv_backfill", lambda m, cap=200: 0)
+    sys.argv = ["search.py", "--topic", args.topic, "--root", args.root,
+                "--seed", "arxiv:2301.00001", "--seed", "arxiv:2302.00002", "--seed", "arxiv:2303.00003"]
+    try:
+        S.main()
+    except SystemExit:
+        pass
+
+    assert len(calls) == 1, f"asked arXiv once per seed after it had refused: {calls}"
+    assert "rate-limited earlier this run" in capsys.readouterr().err

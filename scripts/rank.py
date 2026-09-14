@@ -242,7 +242,8 @@ def main() -> int:
             if not isinstance(keep, list) or not isinstance(undecided, list):
                 raise ValueError("'keep' and 'undecided' must be lists")
             allowed = set(keep) | set(undecided)
-        except (OSError, json.JSONDecodeError, AttributeError, ValueError) as e:
+        # old: except (OSError, json.JSONDecodeError, AttributeError, ValueError) as e:
+        except (OSError, TypeError, json.JSONDecodeError, AttributeError, ValueError) as e:   # same tuple select.py uses on this file
             M.log(f"rank: cannot read {args.only}: {e}")
             return M.EXIT_USAGE
         ranked = [p for p in ranked if p["id"] in allowed]

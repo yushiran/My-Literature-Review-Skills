@@ -478,7 +478,8 @@ def arxiv_backfill(manifest, cap=200):
 FILL_FIELDS = ("title", "year", "abstract", "pdf_url", "doi", "arxiv", "s2", "openalex", "venue")
 
 
-PREPRINT_VENUES = ("arxiv", "biorxiv", "medrxiv", "ssrn", "")
+# old: PREPRINT_VENUES = ("arxiv", "biorxiv", "medrxiv", "ssrn", "")
+PREPRINT_VENUES = M.PREPRINT_VENUES   # one copy: manifest's save-merge applies the same rule
 
 
 def near_duplicate(p: dict, r: dict) -> bool:
@@ -678,6 +679,9 @@ def main():
     manifest["seeds"] = M.as_list(manifest.get("seeds"))
     # old: for spec in args.seed:
     for spec in seeds:
+        if arxiv_skipped and spec.lower().startswith("arxiv:"):
+            M.log(f"seed: {spec!r} skipped, arxiv rate-limited earlier this run")
+            continue     # the flag was set and never read, so every later arxiv: seed still asked
         try:
             r = lookup_seed(spec)
         except (SourceDown, RateLimited) as e:
