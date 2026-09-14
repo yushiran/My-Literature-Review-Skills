@@ -221,9 +221,12 @@ def main() -> int:
         candidates = [p for p in candidates if (p.get("found_date") or "") >= manifest["refreshed"]]
     # candidates.sort(key=lambda p: (-p["score"], -int(p.get("citations") or 0), p["id"]))    # old: no new-only filter, no titles file
     # ranked = candidates[: args.top]                                                          # old: see above
-    ranked = sorted(candidates, key=lambda p: (-p["score"], -int(p.get("citations") or 0), p["id"]))[: args.top]
+    # old: ranked = sorted(candidates, key=...)[: args.top]   # cut before --only dropped kept papers
+    ranked = sorted(candidates, key=lambda p: (-p["score"], -int(p.get("citations") or 0), p["id"]))
     titles_out = tdir / "candidates_titles.md"
-    write_titles(titles_out, manifest, ranked)
+    # old: write_titles(titles_out, manifest, ranked)   # --only overwrote the list the scout triaged
+    if not args.only:                 # --only's job is candidates.md; the scout has read the titles already
+        write_titles(titles_out, manifest, ranked[: args.top])
     n_before_only = len(ranked)       # for the empty-result log below: did --only empty it?
     if args.only:
         try:
@@ -236,10 +239,13 @@ def main() -> int:
             M.log(f"rank: cannot read {args.only}: {e}")
             return M.EXIT_USAGE
         ranked = [p for p in ranked if p["id"] in allowed]
+    ranked = ranked[: args.top]       # cut last: a paper the scout kept must survive the filter first
     write_candidates(out, manifest, ranked, tdir)
     M.save(args, manifest)
     M.log(f"rank: scored {len(papers)} papers, {len(candidates)} candidates, listed {len(ranked)}")
-    print(f"ranked={len(candidates)} candidates={len(ranked)} written={out} titles={titles_out}")
+    # old: print(f"... titles={titles_out}")   # claimed a titles file --only no longer rewrites
+    print(f"ranked={len(candidates)} candidates={len(ranked)} written={out} "
+          f"titles={titles_out}{' (unchanged)' if args.only else ''}")
     if not ranked:
         # M.log("rank: no paper in found/selected/rejected, nothing for the scout")  # old: --only/--new-only can empty ranked too
         if args.new_only and n_pool and not candidates:

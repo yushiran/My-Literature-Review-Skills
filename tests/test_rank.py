@@ -33,6 +33,7 @@ def test_only_restricts_candidates_and_snowball_bonus_orders(args):
     m["papers"]["2025-a-p0"]["snowball_hits"] = 3     # least cited, but most connected
     M.save(args, m)
     d = M.topic_dir(args)
+    assert run(args, []) == 0   # step 1 writes the titles file; step 2 triages it, as SKILL.md runs them
     (d / "triage.json").write_text(json.dumps({"keep": ["2025-a-p0"], "drop": ["2025-a-p1"], "undecided": ["2025-a-p2"]}))
     assert run(args, ["--only", str(d / "triage.json")]) == 0
     c = (d / "candidates.md").read_text()
@@ -40,6 +41,41 @@ def test_only_restricts_candidates_and_snowball_bonus_orders(args):
     assert c.index("2025-a-p0") < c.index("2025-a-p2")
     t = (d / "candidates_titles.md").read_text()
     assert "2025-a-p1" in t   # --only restricts candidates.md only; the titles file stays unfiltered
+
+
+def test_only_keeps_a_paper_ranked_below_the_top_cut(args):
+    """SKILL.md ranks 120 titles for the scout and runs the post-triage command at the
+    default 100, so a paper the scout read at rank 103 and kept must still reach
+    candidates.md: the cut bounds what the scout reads, not what it may keep."""
+    m = M.load(args)
+    for i in range(105):
+        p = M.new_paper(f"2025-a-p{i:03d}", title=f"Paper {i}", venue="ICML", year=2025, citations=i)
+        m["papers"][p["id"]] = p
+    M.save(args, m)
+    d = M.topic_dir(args)
+    assert run(args, ["--top", "120"]) == 0
+    assert "## 103. 2025-a-p002" in (d / "candidates_titles.md").read_text()   # what the scout read
+    (d / "triage.json").write_text(json.dumps({"keep": ["2025-a-p002"], "drop": [], "undecided": []}))
+    assert run(args, ["--only", str(d / "triage.json")]) == 0
+    assert "2025-a-p002" in (d / "candidates.md").read_text()
+
+
+def test_only_leaves_the_titles_file_a_refresh_wrote_untouched(args):
+    """pipeline.py --refresh ranks with --new-only, so candidates_titles.md holds only the
+    new papers. SKILL.md's post-triage command carries --only but not --new-only, so it must
+    not rewrite the file the scout has already triaged with the whole library."""
+    m = lib(args)
+    m["papers"]["2025-a-p0"]["found_date"] = "2000-01-01"
+    m["refreshed"] = M.today()
+    M.save(args, m)
+    d = M.topic_dir(args)
+    assert run(args, ["--new-only"]) == 0
+    before = (d / "candidates_titles.md").read_bytes()
+    assert b"2025-a-p0" not in before          # the refresh left the old paper out
+    (d / "triage.json").write_text(json.dumps({"keep": ["2025-a-p1"], "drop": ["2025-a-p2"], "undecided": []}))
+    assert run(args, ["--only", str(d / "triage.json")]) == 0
+    assert (d / "candidates_titles.md").read_bytes() == before
+    assert "2025-a-p1" in (d / "candidates.md").read_text()
 
 
 def test_new_only_uses_refreshed_date(args):

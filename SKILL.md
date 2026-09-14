@@ -108,6 +108,10 @@ Give `scout` the brief and `candidates_titles.md`; it writes `triage.json`.
 uv run scripts/rank.py --topic <slug> --only references/<slug>/triage.json
 ```
 
+It rewrites `candidates.md` only, leaving `candidates_titles.md` as the run
+above wrote it, and it filters the whole ranking rather than the `--top` cut,
+so a paper the scout kept from below the cut still reaches select.
+
 ### 3. Select — scout, the costly call, now over 20–40 abstracts not 100
 
 ```sh
@@ -167,7 +171,8 @@ uv run scripts/pipeline.py --topic <slug> --refresh
 
 Re-runs the stored queries since the last refresh, snowballs forward from
 everything past selection, ranks only the new ones, and stops for triage +
-select.
+select. Triage and select are steps 2 and 3 above, run unchanged: the `--only`
+command keeps the new-paper `candidates_titles.md` the refresh just wrote.
 Then `pipeline.py` as usual and `index.py --dump-abstracts --new-only` for the
 librarian, giving it the previous `guide.md` so it writes a delta.
 
