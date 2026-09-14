@@ -249,7 +249,9 @@ def openalex_by_title(title, sel):
     """Top-5-by-citations OpenAlex title search; an exact fuzzy-title match wins, else the
     most-cited hit (logged, since it is a guess)."""
     base = "https://api.openalex.org/works"
-    filt = {"filter": f"title.search:{title}", "per-page": 5, "sort": "cited_by_count:desc", **sel}
+    # old: filt = {"filter": f"title.search:{title}", "per-page": 5, "sort": "cited_by_count:desc", **sel}
+    # ':' '|' ',' are OpenAlex filter syntax; a subtitle colon in a seed title was an HTTP 400 (2026-09-14)
+    filt = {"filter": f"title.search:{re.sub(r'[:|,]', ' ', title)}", "per-page": 5, "sort": "cited_by_count:desc", **sel}
     with M.host_gate("api.openalex.org", 0.1):
         data = get_json_retry(f"{base}?{urllib.parse.urlencode(filt)}", name="openalex")
     hits = [openalex_record(w) for w in data.get("results") or []]
