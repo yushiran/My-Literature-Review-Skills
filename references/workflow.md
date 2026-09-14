@@ -117,7 +117,8 @@ found ──rank──▶ (score set) ──scout+select──▶ selected ─�
 
 found, rejected ──search --seed──▶ selected     rejected ──select.py──▶ selected
 no-pdf ──fetch --retry-no-pdf──▶ selected       no-pdf ──convert, URL source──▶ md
-no-pdf, failed ──pdf placed in pdf/ by hand──▶ pdf
+no-pdf ──pdf placed in pdf/ by hand──▶ pdf
+failed ──convert --retry-failed──▶ md / failed
 ```
 
 - `found`: returned by a search source, deduplicated.
@@ -128,7 +129,12 @@ no-pdf, failed ──pdf placed in pdf/ by hand──▶ pdf
   so naming a paper as a seed overrides an earlier rejection. `select.py` does
   the same for an id the scout has changed its mind about.
 - `pdf`: file exists at `pdf/<id>.pdf`. A pdf the user drops in by hand is
-  picked up by fetch.py (any status ≥ selected) and moved to `pdf`.
+  picked up by fetch.py when the paper is `selected`, `pdf` or `no-pdf`, and
+  moved to `pdf`. A `failed` paper is not: its pdf is the one fetch downloaded
+  itself, so "a file is on disk" cannot tell an intervention from the ordinary
+  case, and resurrecting it every run would erase the error and re-convert for
+  ever. It keeps its status and its error, and `convert.py --retry-failed`
+  re-runs it from the pdf already on disk.
 - `no-pdf`: no open-access link, or download refused (paywall, 403). Kept in
   the index with its abstract.
 - `md`: `md/<id>/<id>.md` exists. `conversion: "local-text"` on the paper means

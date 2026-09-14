@@ -184,12 +184,26 @@ def _merge_into(disk: dict, snap, cur: dict) -> dict:
     was_papers = base.setdefault("papers", {}) if snap is not None else on_disk
     for pid, p in (cur.get("papers") or {}).items():
         was, now = was_papers.get(pid), on_disk.get(pid)
+        # old: if was is None or not isinstance(now, dict):
+        if was is None and isinstance(now, dict):
+            # Both runs added this id: make_id is deterministic, so two searches on
+            # overlapping axes land the same paper. Fill what disk lacks, never replace.
+            for k, v in p.items():
+                if isinstance(v, list) and isinstance(now.get(k), list):
+                    now[k] += [x for x in v if x not in now[k]]
+                elif not now.get(k):
+                    now[k] = v
+            now["snowball_hits"] = max(int(now.get("snowball_hits") or 0), int(p.get("snowball_hits") or 0))
+            now["citations"] = max(int(now.get("citations") or 0), int(p.get("citations") or 0))
+            was_papers[pid] = copy.deepcopy(now)
+            continue
         if was is None or not isinstance(now, dict):
             on_disk[pid] = was_papers[pid] = copy.deepcopy(p)   # we added it, or disk holds no usable copy
             continue
         for k, v in p.items():
             if k not in was or was[k] != v:
-                now[k] = was[k] = v   # only the fields we changed, so another writer's fields survive
+                # old: now[k] = was[k] = v
+                now[k], was[k] = v, copy.deepcopy(v)   # only the fields we changed; deep-copy so the snapshot cannot alias a list we mutate in place next
         if snap is not None:
             for k in list(was):       # convert.py drops paper['conversion'] on a full re-conversion
                 if k not in p:
@@ -206,18 +220,23 @@ def _merge_into(disk: dict, snap, cur: dict) -> dict:
         was = base.get(k)
         if not isinstance(was, list):
             was = base[k] = []        # with no snapshot base is disk, so this is `have` and stays one list
-        for item in mine:
-            if item in was:
+        for i, item in enumerate(mine):
+            # old: if item in was:
+            # `rounds` is an append-only log, so two identical entries are two real rounds --
+            # and an identical re-run is exactly the saturated case worth recording. Compare
+            # by position there; seeds and queries are sets and still compare by value.
+            if (i < len(was)) if (snap is not None and k not in SET_LIKE) else (item in was):
                 continue              # already written, by an earlier save of this same manifest
             if not (k in SET_LIKE and item in have):
                 have.append(item)     # seeds and queries are sets: search.py never appends a duplicate either
             if was is not have:
-                was.append(item)
+                was.append(copy.deepcopy(item))   # deep-copy: a saved round dict must not alias the snapshot
     for k, v in cur.items():
         if k == "papers" or k in LIST_KEYS:
             continue
         if k not in base or base[k] != v:
-            disk[k] = base[k] = v     # a scalar we only read stays as the other writer left it
+            # old: disk[k] = base[k] = v
+            disk[k], base[k] = v, copy.deepcopy(v)   # a scalar we only read stays as the other writer left it; deep-copy so `questions` cannot alias
     return disk
 
 
