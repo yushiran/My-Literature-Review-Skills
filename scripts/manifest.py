@@ -91,6 +91,11 @@ def manifest_path(args) -> Path:
 
 LIST_KEYS = ("rounds", "seeds", "queries")   # append-only logs; every other top-level key is a scalar
 SET_LIKE = ("seeds", "queries")              # ... and these two hold no duplicates, as search.py enforces too
+# A paper's only set-valued fields. `authors` is ordered data, not a log: unioning it
+# gives a three-author paper six names. search.py imports both of these so the merge
+# below and search.merge cannot drift apart.
+PAPER_SET_FIELDS = ("sources", "found_via", "refs")
+PREPRINT_VENUES = ("arxiv", "biorxiv", "medrxiv", "ssrn", "")
 
 
 class _Manifest(dict):
@@ -187,14 +192,26 @@ def _merge_into(disk: dict, snap, cur: dict) -> dict:
         # old: if was is None or not isinstance(now, dict):
         if was is None and isinstance(now, dict):
             # Both runs added this id: make_id is deterministic, so two searches on
-            # overlapping axes land the same paper. Fill what disk lacks, never replace.
+            # overlapping axes land the same paper. These rules mirror search.merge's
+            # field-by-field ones; a paper created twice must end up as a paper created
+            # once, or its venue tier and relevance differ and rank.py scores it wrongly.
             for k, v in p.items():
-                if isinstance(v, list) and isinstance(now.get(k), list):
+                # old: if isinstance(v, list) and isinstance(now.get(k), list):
+                if k in PAPER_SET_FIELDS and isinstance(v, list) and isinstance(now.get(k), list):
                     now[k] += [x for x in v if x not in now[k]]
                 elif not now.get(k):
                     now[k] = v
             now["snowball_hits"] = max(int(now.get("snowball_hits") or 0), int(p.get("snowball_hits") or 0))
             now["citations"] = max(int(now.get("citations") or 0), int(p.get("citations") or 0))
+            if p.get("relevance") is not None:   # search.merge takes the larger; so must this
+                now["relevance"] = (p["relevance"] if now.get("relevance") is None
+                                    else max(now["relevance"], p["relevance"]))
+            # A published version outranks the preprint record it matched, as in search.merge.
+            if ((now.get("venue") or "").lower() in PREPRINT_VENUES
+                    and (p.get("venue") or "").lower() not in PREPRINT_VENUES):
+                now["venue"], now["year"] = p["venue"], p.get("year") or now.get("year")
+                if p.get("doi"):
+                    now["doi"] = p["doi"]
             # Filling would keep disk's `found` and drop a decision this run made in the
             # same breath as creating the paper: a --seed hit lands `found` still carrying
             # its seed `why`. A transition off `found` is a decision, so it wins.

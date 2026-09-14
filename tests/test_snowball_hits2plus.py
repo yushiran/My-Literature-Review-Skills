@@ -61,3 +61,30 @@ def test_a_candidate_that_did_land_is_still_counted(args, monkeypatch, capsys):
     assert "hits2plus=1" in capsys.readouterr().out
     landed = [p for p in M.load(args)["papers"].values() if p.get("title") == "Shared Classic"]
     assert landed and landed[0]["snowball_hits"] == 2
+
+
+def test_two_ids_resolving_to_one_paper_count_once(args, monkeypatch, capsys):
+    """OpenAlex merges works, so one paper can carry two ids. hits2plus was routed
+    through pid_of to count papers, but still iterated ids, so it counted them twice."""
+    two_sources(args)
+    m = M.load(args)
+    # One library paper already carries W50; the graph reaches it under W50 and W51.
+    # `found` keeps it out of DEFAULT_FROM, so it is a candidate and not a third source.
+    m["papers"]["2015-x-shared"] = M.new_paper("2015-x-shared", title="Shared Classic",
+                                               openalex="W50", status="found")
+    M.save(args, m)
+
+    def fake_get(url, headers=None, name="x"):
+        url = urllib.parse.unquote(url)
+        if "referenced_works" in url:
+            asked = [w for w in ("W1", "W2") if f"openalex:{w}" in url or f"|{w}" in url]
+            return {"results": [work(w, f"Source {w}", refs=["W50", "W51"]) for w in asked]}
+        if "cites:W1" in url or "cites:W2" in url:
+            return {"results": []}
+        if "openalex:W51" in url or "openalex:W50" in url:
+            return {"results": [work("W51", "Shared Classic", year=2015)]}   # merges onto the same paper by title
+        raise AssertionError(url)
+
+    monkeypatch.setattr(SB, "get_json_retry", fake_get)
+    assert run(args) == 0
+    assert "hits2plus=1" in capsys.readouterr().out   # two ids, one paper: counted 2 before

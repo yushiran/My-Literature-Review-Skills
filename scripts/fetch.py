@@ -281,7 +281,9 @@ def openalex_meta(doi, timeout, what):
     if api_key:
         # Runs once per paper, and the anonymous pool is 1000 requests a day against 10000.
         url += "&api_key=" + urllib.parse.quote(api_key, safe="")
-    data = get_json(url, timeout, what)
+    # old: data = get_json(url, timeout, what)
+    with M.host_gate("api.openalex.org", 0.1):   # the only OpenAlex call that was outside the cross-process gate
+        data = get_json(url, timeout, what)
     oa = (data.get("best_oa_location") or {}).get("pdf_url") or ""
     landing = (data.get("primary_location") or {}).get("landing_page_url") or ""
     pmcid = ""
