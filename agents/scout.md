@@ -33,9 +33,13 @@ Rules:
 - Questions are answerable from papers, not slogans. "What sampling schemes
   make diffusion posterior sampling stable at high acceleration?" is a
   question; "diffusion for MRI" is not.
-- Queries are what a search API takes: 3–8 words, no quotes inside, each one
-  covering a different facet or phrasing (method name, task name, synonym,
-  the adjacent community's word for the same thing). Four to eight of them.
+- Queries are what a search API takes: 2–4 content words, no quotes inside.
+  OpenAlex and arXiv match every word of a query, so a six-word query returns
+  nothing (measured 2026-09-14: "perception-distortion tradeoff Wasserstein
+  optimal estimator" gave 0 hits, "perception-distortion tradeoff" gave 100).
+  Put one facet in each query and vary the phrasing across queries (method
+  name, task name, synonym, the adjacent community's word for the same thing)
+  instead of stacking terms inside one. Four to eight of them.
 - `since` is two years before today unless the user said otherwise.
 - Before writing the brief, read `references/README.md` if it exists: one line
   per existing library. Name any library that already covers a question so the
