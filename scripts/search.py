@@ -149,14 +149,22 @@ def arxiv_id_from_url(url):
 
 def record(source, **f):
     relevance = f.get("relevance")
+    doi = M.norm_doi(f.get("doi"))
+    # old: "arxiv": M.norm_arxiv(f.get("arxiv")) if f.get("arxiv") else "",
+    # An OpenAlex record reached through the arXiv DataCite DOI (every `--seed arxiv:` that OpenAlex
+    # has indexed) carries the id only inside that DOI: without this, fetch.py has no arXiv route
+    # and convert.py no URL route, and the paper sits `selected` behind a stale proxy (2026-09-17).
+    arxiv = M.norm_arxiv(f.get("arxiv")) if f.get("arxiv") else ""
+    if not arxiv and doi.startswith("10.48550/arxiv."):
+        arxiv = M.norm_arxiv(doi)
     return {
         "source": source,
         "title": clean(f.get("title")),
         "authors": [clean(a) for a in f.get("authors") or [] if clean(a)],
         "year": f.get("year"),
         "venue": clean(f.get("venue")),
-        "doi": M.norm_doi(f.get("doi")),
-        "arxiv": M.norm_arxiv(f.get("arxiv")) if f.get("arxiv") else "",
+        "doi": doi,
+        "arxiv": arxiv,
         "openalex": f.get("openalex") or "",
         "s2": f.get("s2") or "",
         "citations": int(f.get("citations") or 0),
@@ -258,9 +266,25 @@ def openalex_by_title(title, sel):
     exact = [h for h in hits if M.fuzzy_title(h["title"]) == M.fuzzy_title(title)]
     if exact:
         return exact[0]
+    # old: if hits:
+    # old:     M.log(f"seed: no exact title match for {title!r}; taking the most cited hit {hits[0]['title']!r}")
+    # old:     return hits[0]
+    # A guessed seed is the costliest mistake this script can make: it enters as `selected` and the
+    # snowball walks its citation graph. 2026-09-17: 'On the Measure of Intelligence' became a 1998
+    # emotional-intelligence paper plus 147 of its citations; 'Consistency Models' a plant cell-wall
+    # paper. Only a near-identical title variant is accepted; otherwise the seed is skipped and the
+    # caller is told to pass doi:/arxiv:, which resolve without a guess.
+    want = M.title_tokens(title)
+    def overlap(h):
+        have = M.title_tokens(h["title"])
+        return len(want & have) / len(want | have) if want | have else 0.0
+    best = max(hits, key=overlap, default=None)
+    if best and overlap(best) >= 0.6:
+        M.log(f"seed: no exact title match for {title!r}; taking the near-identical {best['title']!r}")
+        return best
     if hits:
-        M.log(f"seed: no exact title match for {title!r}; taking the most cited hit {hits[0]['title']!r}")
-        return hits[0]
+        M.log(f"seed: no title match for {title!r} (closest hit {hits[0]['title']!r}); skipped, "
+              f"pass it as doi:… or arxiv:… instead")
     return None
 
 
