@@ -40,8 +40,10 @@ once; it is the data contract every script and agent follows.
    is 6 GB and a CPU-only one 0.7 GB, the models are 0.9 GB for `basic` and
    2.1 GB with `standard`, and a converted paper is about 5 MB. It all lands in
    `$XDG_CACHE_HOME/litrev/mineru`; when that filesystem is small or under
-   quota, point `LITREV_MINERU_HOME` at one with room. **A login node caps a
-   user at 4 GB of memory, below that peak, so convert on a compute node.**
+   quota, put `LITREV_MINERU_HOME=<a disk with room>` in
+   `~/.config/litrev/access.env`, where the scripts read it themselves, or
+   export it. **A login node caps a user at 4 GB of memory, below that peak, so
+   convert on a compute node.**
 
    `convert.py` installs nothing itself. When the local backend is missing it
    prints one line naming `--setup` and converts what it can; run the setup,

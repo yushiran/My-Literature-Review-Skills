@@ -4,7 +4,8 @@
 # ///
 """Local MinerU: install the open-source package, then convert a pdf without the hosted API.
 
-Everything lives under one root, `LITREV_MINERU_HOME`, else `$XDG_CACHE_HOME/litrev/mineru`,
+Everything lives under one root: `LITREV_MINERU_HOME`, which may be exported or written
+into `~/.config/litrev/access.env` like the other settings, else `$XDG_CACHE_HOME/litrev/mineru`,
 else `~/.cache/litrev/mineru` — never inside the repo and never in the user's own `~/.mineru`:
 
     <root>/venv        a uv venv holding `mineru`; 6.0 GB with the torch extra, 0.7 GB without
@@ -493,6 +494,7 @@ def convert(pdf: Path, out: Path, pid: str, device: str = "auto", tier: str = "b
 # ---------------------------------------------------------------- main
 
 def main() -> int:
+    M.load_env()   # LITREV_MINERU_HOME may live in ~/.config/litrev/access.env, as convert.py reads it
     p = argparse.ArgumentParser(description="Set up and run a local MinerU, with no hosted API.")
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--setup", action="store_true", help="install mineru and download its models")

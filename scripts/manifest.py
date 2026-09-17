@@ -35,9 +35,12 @@ ENV_FILE = "~/.config/litrev/access.env"
 # The keys load_env will take from the credential file; not all of them are secrets.
 # old: SECRETS = ("OPENALEX_API_KEY", "S2_API_KEY", "WILEY_TDM_TOKEN", "ELSEVIER_API_KEY",
 # old:            "ELSEVIER_INSTTOKEN", "LITREV_EZPROXY_HOST", "LITREV_COOKIES", "SPRINGER_API_KEY")
+# old: SECRETS = ("OPENALEX_API_KEY", "S2_API_KEY", "MINERU_TOKEN", "WILEY_TDM_TOKEN", "ELSEVIER_API_KEY",
+# old:            "ELSEVIER_INSTTOKEN", "LITREV_EZPROXY_HOST", "LITREV_COOKIES", "LITREV_VERIFY_URL",
+# old:            "SPRINGER_API_KEY")
 SECRETS = ("OPENALEX_API_KEY", "S2_API_KEY", "MINERU_TOKEN", "WILEY_TDM_TOKEN", "ELSEVIER_API_KEY",
            "ELSEVIER_INSTTOKEN", "LITREV_EZPROXY_HOST", "LITREV_COOKIES", "LITREV_VERIFY_URL",
-           "SPRINGER_API_KEY")
+           "SPRINGER_API_KEY", "LITREV_MINERU_HOME")   # where the local MinerU was installed
 
 
 def load_env(path=None):
