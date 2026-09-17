@@ -2,18 +2,22 @@
 # requires-python = ">=3.9"
 # dependencies = []
 # ///
-"""Convert every `pdf` paper to Markdown with `mineru-open-api extract`.
+"""Convert every `pdf` paper to Markdown with MinerU, hosted or local.
 
-One CLI subprocess per paper, N in parallel (the CLI's own --concurrency is
-reserved and does nothing). A paper with an arXiv id or an open-access
-`pdf_url` is handed to the CLI as a URL, so the MinerU server fetches it
-itself and nothing is uploaded from this machine (uploads to the MinerU OSS
-bucket time out from many HPC / campus networks). The local pdf/<id>.pdf is
-uploaded only when no URL exists or the URL attempt failed; `--upload` forces
-the local file. Output lands in md/<id>/<id>.md with its images/ directory
-beside it. Success -> `md`; failure or timeout -> `failed` with the last
-stderr line in `error`. The token gate runs before any paper is touched and a
-rejected token stops the run with exit 3. Never falls back to flash-extract.
+One subprocess per paper, N in parallel (the hosted CLI's own --concurrency is
+reserved and does nothing). The routes are tried in order. A paper with an
+arXiv id or an open-access `pdf_url` is handed to `mineru-open-api extract` as
+a URL, so the MinerU server fetches it itself and nothing is uploaded from this
+machine (uploads to the MinerU OSS bucket time out from many HPC / campus
+networks). The local pdf/<id>.pdf is uploaded next; `--upload` forces the local
+file. Then comes the local backend, scripts/mineru_local.py, which runs the
+open-source `mineru` on this machine and needs no token at all: it is taken
+when the hosted routes fail, when no token is configured, or when
+`--backend local` is passed, and the paper it converts is marked
+`conversion: "local-mineru"`. Output lands in md/<id>/<id>.md with its images/
+directory beside it. Success -> `md`; failure or timeout -> `failed` with the
+last stderr line in `error`. Exit 3 only when neither backend can run: no token
+and no local install. Never falls back to flash-extract.
 Contract: references/workflow.md.
 """
 import concurrent.futures as cf
@@ -27,6 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import manifest as M  # noqa: E402
+import mineru_local as ML  # noqa: E402
 
 CLI = "mineru-open-api"
 TOKEN_MSG = (
@@ -191,36 +196,53 @@ def local_text_md(pdf: Path, md: Path, timeout: float) -> str:
     return ""
 
 
-def sources_of(p: dict, pdf_path: Path, upload_only: bool) -> list:
-    """Ordered (mode, source) attempts: arXiv URL, then pdf_url, then the local file.
+def sources_of(p: dict, pdf_path: Path, upload_only: bool, hosted: bool = True,
+               local: bool = False) -> list:
+    """Ordered (mode, source) attempts: arXiv URL, then pdf_url, then upload, then local.
 
     A PDF that only came down through the institutional proxy or a mining API must
     be uploaded. MinerU fetches a URL from its own servers, which hold none of our
     credentials, so handing it the publisher link would convert a login or paywall
     page into plausible-looking markdown and file it as the paper.
+
+    The local backend comes last and reads the file we already hold, so it is
+    unaffected by `upload_only` and by a hosted route being switched off.
     """
     if p.get("pdf_via") in CREDENTIALED_VIA:
         upload_only = True
     out = []
-    if not upload_only:
+    # old: if not upload_only:
+    if hosted and not upload_only:
         if p.get("arxiv"):
             out.append(("url", f"https://arxiv.org/pdf/{p['arxiv']}"))
         url = p.get("pdf_url") or ""
         if url.startswith(("http://", "https://")):
             out.append(("url", url))
     if pdf_path.is_file():
-        out.append(("upload", str(pdf_path.resolve())))
+        # old: out.append(("upload", str(pdf_path.resolve())))
+        if hosted:
+            out.append(("upload", str(pdf_path.resolve())))
+        if local:
+            out.append(("local", str(pdf_path.resolve())))
     return out
 
 
 def convert_one(pid: str, mode: str, source: str, out_dir: Path, args, abort: threading.Event) -> dict:
-    """One CLI run; `source` is a URL the MinerU server fetches or a local pdf path it uploads."""
+    """One run; `source` is a URL the MinerU server fetches, or a local pdf we upload or read."""
     res = {"id": pid, "status": "failed", "error": "", "stderr": ""}
     if abort.is_set():
         res["error"] = "not attempted: run aborted"
         res["status"] = "skipped"
         return res
     out_dir.mkdir(parents=True, exist_ok=True)
+    if mode == "local":
+        # The local backend writes the skill's layout itself and needs no token.
+        M.log(f"convert: {pid}: start (local mineru: {Path(source).name})")
+        out = ML.convert(Path(source), out_dir, pid, timeout=max(args.timeout, ML.CONVERT_TIMEOUT))
+        res["status"], res["error"] = out["status"], out["error"]
+        if res["status"] == "md":
+            res["backend"] = "local-mineru"
+        return res
     cmd = [
         CLI, "extract", source, "-o", str(out_dir.resolve()) + os.sep,
         "-f", "md", "--language", args.language, "--timeout", str(int(args.timeout)),
@@ -279,6 +301,9 @@ def main() -> int:
                              "papers locally (default local-text)")
     parser.add_argument("--upload", action="store_true",
                         help="always upload the local pdf; skip the arXiv / pdf_url URL attempts")
+    parser.add_argument("--backend", choices=("auto", "hosted", "local"), default="auto",
+                        help="auto = hosted API when a token is configured, local MinerU when it "
+                             "is not or when a hosted route fails (default auto)")
     args = parser.parse_args()
     if args.local_text_fallback:
         args.upload_fallback = "local-text"
@@ -286,10 +311,22 @@ def main() -> int:
         M.log("convert: --jobs must be >= 1")
         return M.EXIT_USAGE
 
-    msg = token_gate()
-    if msg:
-        M.log(msg)
+    # Two backends. The token is no longer a requirement: it is exit 3 only when the hosted
+    # API cannot run AND the local one is not installed, because then nothing can convert.
+    # old: msg = token_gate()
+    # old: if msg:
+    # old:     M.log(msg)
+    # old:     return M.EXIT_TOKEN
+    hosted_msg = token_gate() if args.backend != "local" else "hosted backend not selected"
+    hosted_ok = args.backend != "local" and not hosted_msg
+    local_ok = args.backend != "hosted" and ML.is_setup()
+    if not hosted_ok and not local_ok:
+        M.log(hosted_msg if args.backend != "local" else "convert: --backend local was asked for")
+        if args.backend != "hosted":
+            M.log(ML.SETUP_MSG)
         return M.EXIT_TOKEN
+    if not hosted_ok and local_ok and args.backend == "auto":
+        M.log("convert: no hosted MinerU token; converting locally")
 
     manifest = M.load(args)
     tdir = M.topic_dir(args)
@@ -314,7 +351,9 @@ def main() -> int:
             p["status"], p["error"] = "md", ""
             n_skip += 1
             M.log(f"convert: {p['id']}: already converted")
-        elif p["status"] == "no-pdf" and (args.upload or not sources_of(p, pdf_path(p), False)):
+        # old: elif p["status"] == "no-pdf" and (args.upload or not sources_of(p, pdf_path(p), False)):
+        elif p["status"] == "no-pdf" and (args.upload
+                                          or not sources_of(p, pdf_path(p), False, hosted_ok, local_ok)):
             continue  # nothing the server could fetch; stays no-pdf with its abstract
         else:
             todo.append(p)
@@ -325,11 +364,14 @@ def main() -> int:
         M.log("convert: nothing to convert")
         print(f"md=0 failed=0 skipped={n_skip} remaining_pdf={remaining}")
         return M.EXIT_OK if n_skip else M.EXIT_NOTHING
-    M.log(f"convert: {len(todo)} paper(s), {args.jobs} job(s), model={args.model}")
+    backends = ", ".join([b for b, on in (("hosted", hosted_ok), ("local", local_ok)) if on])
+    M.log(f"convert: {len(todo)} paper(s), {args.jobs} job(s), model={args.model}, backend={backends}")
 
     lock = threading.Lock()
     abort = threading.Event()
     upload_dead = threading.Event()  # set once any upload times out; skips later upload-only attempts
+    local_warned = threading.Event()  # the "run --setup" line is printed once a run, not per paper
+    hosted_dead = threading.Event()   # set when the API rejects the token and local can take over
     counts = {"md": 0, "failed": 0, "skipped": n_skip}
     token_err = []
 
@@ -353,6 +395,9 @@ def main() -> int:
                 if r.get("local_text"):
                     p["conversion"] = "local-text"   # no figures/tables; see local_text_md
                     M.log(f"convert: {r['id']}: md (local text only)")
+                elif r.get("backend") == "local-mineru":
+                    p["conversion"] = "local-mineru"  # a full conversion, run on this machine
+                    M.log(f"convert: {r['id']}: md (local mineru)")
                 else:
                     p.pop("conversion", None)
                     M.log(f"convert: {r['id']}: md")
@@ -370,7 +415,11 @@ def main() -> int:
     def work(p):
         pdf = pdf_path(p)
         # Try each source in order; stop at the first md (or a token rejection / abort).
-        attempts = sources_of(p, pdf, args.upload)
+        # old: attempts = sources_of(p, pdf, args.upload)
+        attempts = sources_of(p, pdf, args.upload, hosted_ok, local_ok)
+        # The upload is known dead this run, so drop it and let the local backend take the paper.
+        if upload_dead.is_set() and any(m == "local" for m, _ in attempts):
+            attempts = [a for a in attempts if a[0] != "upload"]
         # Upload is known dead this run; an upload-only paper skips straight to local text.
         if (upload_dead.is_set() and args.upload_fallback == "local-text"
                 and all(m == "upload" for m, _ in attempts) and pdf.is_file()):
@@ -383,13 +432,31 @@ def main() -> int:
             record(r)
             return r
         errors = []
+        r = {"id": p["id"], "status": "failed", "error": "no route left", "stderr": ""}
         for mode, source in attempts:
+            if hosted_dead.is_set() and mode != "local":
+                continue            # the API rejected the token earlier this run
             r = convert_one(p["id"], mode, source, tdir / "md" / p["id"], args, abort)
+            # A rejected token kills the hosted backend, not the run: the local one still works.
+            if r["status"] == "token" and local_ok:
+                with lock:
+                    if not hosted_dead.is_set():
+                        hosted_dead.set()
+                        M.log("convert: the hosted API rejected the token; "
+                              "converting the rest locally")
+                errors.append(f"{mode}: {r['error']}")
+                r["status"] = "failed"
+                continue
             if r["status"] in ("md", "token", "skipped"):
                 break
             errors.append(f"{mode}: {r['error']}")
         if r["status"] == "failed":
             r["error"] = " | ".join(errors)[:MAX_ERROR]
+            # The hosted API failed and the local backend is not installed. Say so once, and
+            # do not install gigabytes behind the caller's back: the remaining routes run on.
+            if not local_ok and args.backend != "hosted" and not local_warned.is_set():
+                local_warned.set()
+                M.log(ML.SETUP_MSG)
             # MinerU could neither fetch it nor accept the upload; read it locally.
             # old: if (any(e.startswith("upload:") and "Timeout" in e for e in errors) and not upload_dead.is_set()):
             with lock:  # check-then-act on upload_dead must be atomic across worker threads

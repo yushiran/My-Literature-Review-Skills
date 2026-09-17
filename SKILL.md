@@ -21,12 +21,37 @@ once; it is the data contract every script and agent follows.
    `references/<topic>/INDEX.md`. Grep it, pick ids, open only those
    `md/<id>/<id>.md`. `INDEX.md` lists the papers that were selected but never
    read; do not cite their content as verified.
-4. **MinerU needs a token, and the token is the user's to give.** If
-   `convert.py` exits 3, stop and tell the user:
-   > MinerU 需要 API token。在 https://mineru.net/apiManage/token 生成一个，然后
-   > `mineru-open-api auth`（交互式）或 `export MINERU_TOKEN=...`，我再继续。
-   Do not fall back to `flash-extract` on your own: it drops the figures and
-   caps at 20 pages. Only if the user says they will not get a token.
+4. **MinerU runs hosted or local, and the token is no longer required.** A
+   token in `~/.config/litrev/access.env` sends every paper to the hosted API,
+   the fastest route and the one that spends nothing of this machine. Without
+   one, or when a hosted route fails, `convert.py` takes the local backend: the
+   open-source `mineru` run here, same markdown and same figures, on the GPU
+   when there is one and on the CPU otherwise. It installs once:
+
+   ```sh
+   uv run scripts/mineru_local.py --check    # what is installed, which device, how much room
+   uv run scripts/mineru_local.py --setup    # ask the user first: about 7 GB and a download
+   ```
+
+   **Ask before `--setup`**, and say what it costs. Measured 2026-09-17, mineru
+   4.0.1, tier `basic`, one 29-page ICLR paper: a GH200 GPU took **3 min 11 s**
+   and 72 Grace CPU cores **12 min 31 s**, both peaking at about **4.5 GB**
+   resident and producing the same markdown, tables included. Disk: a GPU venv
+   is 6 GB and a CPU-only one 0.7 GB, the models are 0.9 GB for `basic` and
+   2.1 GB with `standard`, and a converted paper is about 5 MB. It all lands in
+   `$XDG_CACHE_HOME/litrev/mineru`; when that filesystem is small or under
+   quota, point `LITREV_MINERU_HOME` at one with room. **A login node caps a
+   user at 4 GB of memory, below that peak, so convert on a compute node.**
+
+   `convert.py` installs nothing itself. When the local backend is missing it
+   prints one line naming `--setup` and converts what it can; run the setup,
+   then `convert.py --retry-failed`. Do not fall back to `flash-extract` or to
+   `--local-text-fallback` on your own: the first drops the figures and caps at
+   20 pages, the second keeps every word but no figures or tables. Exit 3 means
+   neither backend can run:
+   > MinerU 两条路都不通。要么在 https://mineru.net/apiManage/token 生成 token 写进
+   > `~/.config/litrev/access.env`，要么让我跑 `mineru_local.py --setup` 装本地模型
+   > (约 7 GB，装完就不再需要 token)。
 5. **Paywalled papers are reachable, and the credentials are the user's to
    give.** Read [references/institutional-access.md](references/institutional-access.md)
    before telling the user a paper cannot be had: it holds the routes, how to find
@@ -174,11 +199,16 @@ uv run scripts/pipeline.py --topic <slug> --jobs 4
 ```
 
 A stale proxy session is detected once at the start and skipped for the run;
-the cookie procedure is in references/institutional-access.md. A MinerU
-upload timeout switches the remaining upload-only papers to local text
-automatically (`--upload-fallback none` to disable). A paper that ended
-`failed` keeps that status and its error across runs; to convert it again,
-run `convert.py --retry-failed`, which reads the pdf still on disk.
+the cookie procedure is in references/institutional-access.md. Conversion goes
+to the local MinerU whenever the hosted route has no token or fails, and to
+local text only after that: a MinerU upload timeout switches the remaining
+upload-only papers to local text automatically (`--upload-fallback none` to
+disable), unless the local backend is installed and takes them first. A paper
+that ended `failed` keeps that
+status and its error across runs; to convert it again, run
+`convert.py --retry-failed`, which reads the pdf still on disk. Four jobs of
+the local backend do not run four conversions: it holds a machine-wide lock
+and takes one paper at a time, at the speeds in rule 4.
 
 ### 6. Reading guide — librarian, then the gap check
 

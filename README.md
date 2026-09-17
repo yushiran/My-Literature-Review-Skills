@@ -86,11 +86,22 @@ claude plugin marketplace add yushiran/academic-skills
 claude plugin install literature-review@yushiran-research
 ```
 
-`mineru-document-extractor` comes as a dependency. MinerU's CLI is
-`npm install -g mineru-open-api`; conversion with figures needs a token from
-<https://mineru.net/apiManage/token> (`mineru-open-api auth`). A paper with an
-arXiv id or an open-access link is converted by URL, fetched by the MinerU
-server itself; the local PDF is uploaded only when no URL exists.
+`mineru-document-extractor` comes as a dependency. Conversion runs on MinerU
+either way, hosted or local. Hosted is `npm install -g mineru-open-api` plus a
+token from <https://mineru.net/apiManage/token> (`mineru-open-api auth`): a
+paper with an arXiv id or an open-access link is converted by URL, fetched by
+the MinerU server itself, and the local PDF is uploaded only when no URL
+exists. Local needs no token and no network at conversion time:
+
+```sh
+uv run scripts/mineru_local.py --setup    # a venv and the models, about 7 GB, once
+uv run scripts/mineru_local.py --check    # what is installed, and whether it will use the GPU
+```
+
+It installs the open-source `mineru` package under
+`$XDG_CACHE_HOME/litrev/mineru` (`LITREV_MINERU_HOME` moves it), uses the GPU
+when there is one and the CPU otherwise, and `convert.py` falls back to it
+whenever the hosted route has no token or fails.
 
 ### Keys
 
@@ -132,7 +143,8 @@ can re-run on its own.
 | `snowball.py` | one hop on the citation graph, backward and forward |
 | `fetch.py` | downloads open-access PDFs; extra routes when there is none |
 | `access.py` | Europe PMC, publisher mining APIs, institutional proxy |
-| `convert.py` | MinerU to Markdown, with a local text-only fallback |
+| `convert.py` | MinerU to Markdown: hosted API, then the local backend, then a text-only fallback |
+| `mineru_local.py` | installs the open-source MinerU and runs it here, GPU or CPU |
 | `index.py` | writes `INDEX.md` and the abstract dump for the librarian; on `--guide` refuses an id the manifest does not hold and searches every abstract, seen or not, for each gap's `terms:`; `--grep` runs that search by hand |
 | `pipeline.py` | fetch → convert → index, and `--refresh` for a living review |
 | `manifest.py` | the shared state: schema, ids, locking, the merge on save |

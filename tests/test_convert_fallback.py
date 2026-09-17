@@ -19,7 +19,8 @@ def test_second_upload_is_skipped_after_a_timeout(args, monkeypatch, tmp_path):
     monkeypatch.setattr(C, "convert_one", fake_convert_one)
     monkeypatch.setattr(C, "local_text_md", lambda pdf, md, t: (md.parent.mkdir(parents=True, exist_ok=True), md.write_text("x" * 5000), "")[2])
     monkeypatch.setattr(C, "token_gate", lambda: "")
-    monkeypatch.setattr(C, "sources_of", lambda p, pdf, up: [("upload", str(pdf))])
+    # *rest: sources_of also takes the hosted/local backend gates now.
+    monkeypatch.setattr(C, "sources_of", lambda p, pdf, up, *rest: [("upload", str(pdf))])
     sys.argv = ["convert.py", "--topic", args.topic, "--root", args.root, "--jobs", "1"]
     assert C.main() == 0
     assert [c[0] for c in calls] == ["p1"]            # p2 never tried the upload
@@ -45,7 +46,7 @@ def test_second_upload_is_skipped_after_our_own_lowercase_timeout(args, monkeypa
     monkeypatch.setattr(C, "convert_one", fake_convert_one)
     monkeypatch.setattr(C, "local_text_md", lambda pdf, md, t: (md.parent.mkdir(parents=True, exist_ok=True), md.write_text("x" * 5000), "")[2])
     monkeypatch.setattr(C, "token_gate", lambda: "")
-    monkeypatch.setattr(C, "sources_of", lambda p, pdf, up: [("upload", str(pdf))])
+    monkeypatch.setattr(C, "sources_of", lambda p, pdf, up, *rest: [("upload", str(pdf))])
     sys.argv = ["convert.py", "--topic", args.topic, "--root", args.root, "--jobs", "1"]
     assert C.main() == 0
     assert [c[0] for c in calls] == ["p1"]            # p2 never tried the upload

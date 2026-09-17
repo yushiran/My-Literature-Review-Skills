@@ -1,7 +1,7 @@
 {
   "name": "literature-review",
-  "version": "0.2.3",
-  "description": "Build a local, indexed literature library for a research topic: search, rank, select, download, convert with MinerU, index.",
+  "version": "0.2.4",
+  "description": "Build a local, indexed literature library for a research topic: search, rank, select, download, convert with MinerU (hosted API or a local install, GPU or CPU), index.",
   "author": {
     "name": "Shiran Yu"
   },

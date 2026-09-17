@@ -41,6 +41,13 @@ def _no_real_credentials(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _mineru_root(tmp_path, monkeypatch):
+    """No test may see this machine's real local MinerU. is_setup() decides convert.py's
+    route order, so a developer who has run --setup would otherwise run other code."""
+    monkeypatch.setenv("LITREV_MINERU_HOME", str(tmp_path / "mineru-root"))
+
+
+@pytest.fixture(autouse=True)
 def _no_network(monkeypatch):
     """A forgotten mock must fail loudly here, not make a real request that is slow and
     passes only because the remote happened to answer with an error that day."""
