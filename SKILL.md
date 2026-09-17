@@ -180,18 +180,38 @@ automatically (`--upload-fallback none` to disable). A paper that ended
 `failed` keeps that status and its error across runs; to convert it again,
 run `convert.py --retry-failed`, which reads the pdf still on disk.
 
-### 6. Reading guide — librarian
+### 6. Reading guide — librarian, then the gap check
 
 ```sh
 uv run scripts/index.py --topic <slug> --dump-abstracts > /tmp/abstracts.md
 ```
 
-The dump marks `[unread: …]` and `[text-only]` papers; the guide must too.
-Give it to `librarian`, then fold the result in:
+The dump opens with a `Coverage:` block: how many papers the librarian is
+shown out of how many the library holds, and how many `found` and `rejected`
+abstracts it is not. On one real library that was 53 of 2392, and the guide
+still said "nowhere in this library". The dump marks `[unread: …]` and
+`[text-only]` papers; the guide must too. Give it to `librarian`; it ends
+every gap with a `terms:` line. Fold the result in:
 
 ```sh
 uv run scripts/index.py --topic <slug> --guide references/<slug>/guide.md
 ```
+
+The fold is a gate, not a copy. It refuses (exit 1) a guide that cites an id
+the manifest does not hold, which is the librarian inventing a paper. It puts
+a `_Guide scope:_` line above the guide with the manifest's own counts, and
+under every `terms:` line a `checked:` line naming the papers, in any state,
+whose title or abstract carries the terms and that the librarian never saw.
+Read those lines. When one names ids outside the set, hand the librarian
+their abstracts together with the guide, and fold the revision:
+
+```sh
+uv run scripts/index.py --topic <slug> --dump-abstracts --ids <id> <id> > /tmp/hits.md
+```
+
+A guide with no `terms:` line folds with a warning and its gaps stand
+unchecked; send it back. Both generated lines live in `INDEX.md` only, are
+recomputed from the manifest on every render, and never touch `guide.md`.
 
 ### 7. Report
 
@@ -222,8 +242,17 @@ When the user asks something about a topic that has a library:
 1. Read `references/<topic>/INDEX.md` (the guide first, then the table).
 2. Pick the ids whose title or abstract match; usually two to five.
 3. Open those `md/<id>/<id>.md`, cite by id and section, and answer.
-4. If nothing in the index fits, say so and offer to extend the library
-   with a targeted search rather than guessing.
+4. If nothing in the index fits, search the whole library before saying so:
+
+   ```sh
+   uv run scripts/index.py --topic <slug> --grep "term; term|alternative"
+   ```
+
+   lists every paper in any state, `found` and `rejected` included, whose
+   title or abstract carries the terms, one line each with its status. A hit
+   that was never selected is a candidate to promote through `select.py`, not
+   a source to cite. Only when that also finds nothing, say so and offer to
+   extend the library with a targeted search rather than guessing.
 
 ## Layout produced
 

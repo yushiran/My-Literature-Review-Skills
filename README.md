@@ -133,7 +133,7 @@ can re-run on its own.
 | `fetch.py` | downloads open-access PDFs; extra routes when there is none |
 | `access.py` | Europe PMC, publisher mining APIs, institutional proxy |
 | `convert.py` | MinerU to Markdown, with a local text-only fallback |
-| `index.py` | writes `INDEX.md` and the abstract dump for the librarian |
+| `index.py` | writes `INDEX.md` and the abstract dump for the librarian; on `--guide` refuses an id the manifest does not hold and searches every abstract, seen or not, for each gap's `terms:`; `--grep` runs that search by hand |
 | `pipeline.py` | fetch → convert → index, and `--refresh` for a living review |
 | `manifest.py` | the shared state: schema, ids, locking, the merge on save |
 
